@@ -283,6 +283,7 @@ def download_media(
     filename: str | None = None,
     extract_text: bool = False,
     max_chars: int = 3000,
+    password: str | None = None,
 ) -> str:
     """Baixa o anexo de uma mensagem para o disco e devolve só caminho e metadados (sem base64).
 
@@ -292,11 +293,13 @@ def download_media(
         filename: nome do arquivo (padrão: nome original)
         extract_text: True extrai texto de PDF/txt, ou transcreve quando o anexo é áudio/vídeo
         max_chars: limite do texto extraído
-    Returns: {path, file, mime, size, type, pages?, text?, text_truncated?, text_error?}
+        password: senha de um PDF protegido. O arquivo é gravado já destravado, e o texto
+                  passa a ser extraível. Sem ela, um PDF com senha volta com text_error
+    Returns: {path, file, mime, size, type, decrypted?, pages?, text?, text_error?}
     """
     return _out(client.download_media(
         message_id=message_id, save_dir=save_dir, filename=filename,
-        extract_text=extract_text, max_chars=max_chars,
+        extract_text=extract_text, max_chars=max_chars, password=password,
     ))
 
 
@@ -342,6 +345,7 @@ def archive_to_drive(
     file_path: str | None = None,
     folder: str = "",
     filename: str | None = None,
+    password: str | None = None,
 ) -> str:
     """Arquiva um anexo do WhatsApp no Google Drive sem trazer o arquivo para a conversa.
 
@@ -355,13 +359,16 @@ def archive_to_drive(
         folder: caminho da pasta, relativo à pasta base configurada
                 (ex: "MR/2026/08.2026/BOLETO")
         filename: nome final do arquivo (padrão: o nome original)
-    Returns: {id, name, folder, size, link}
+        password: senha de um PDF protegido; a versão arquivada vai destravada
+    Returns: {id, name, folder, size, link, decrypted?}
     """
     if bool(message_id) == bool(file_path):
         raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
     try:
         if message_id:
-            return _out(client.archive_media(message_id=message_id, folder=folder, filename=filename))
+            return _out(client.archive_media(
+                message_id=message_id, folder=folder, filename=filename, password=password
+            ))
         return _out(client.archive_file(file_path=file_path, folder=folder, filename=filename))
     except DriveError as e:
         return _out({"error": str(e), "drive": client.drive.describe()})

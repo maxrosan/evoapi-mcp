@@ -117,6 +117,7 @@ class DownloadMediaRequest(BaseModel):
     filename: str | None = Field(None, description="Nome do arquivo")
     extract_text: bool = Field(False, description="Extrair texto de PDF/txt")
     max_chars: int = Field(3000, description="Limite do texto extraído")
+    password: str | None = Field(None, description="Senha de um PDF protegido")
 
 
 # =============================================================================
@@ -369,6 +370,7 @@ async def download_media(request: DownloadMediaRequest):
             filename=request.filename,
             extract_text=request.extract_text,
             max_chars=request.max_chars,
+            password=request.password,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

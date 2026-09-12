@@ -126,6 +126,18 @@ EVOLUTION_TRANSCRIBE_MODEL=small
 Sem nenhum dos dois, `transcribe_audio` devolve um erro explicando o que configurar.
 `get_instance_info()` mostra o backend ativo.
 
+### PDFs protegidos por senha
+
+Boletos costumam vir cifrados. Passe a senha e o arquivo é gravado **já destravado**,
+tanto no download quanto no arquivamento:
+
+```
+download_media(message_id="...", password="1234", extract_text=True)
+archive_to_drive(message_id="...", folder="MR/2026/09.2026/BOLETO", password="1234")
+```
+
+Sem a senha, a extração de texto volta com `text_error` avisando que o PDF é protegido.
+
 ### Conversas `@lid`
 
 O WhatsApp está migrando conversas de `<numero>@s.whatsapp.net` para `<id opaco>@lid`;

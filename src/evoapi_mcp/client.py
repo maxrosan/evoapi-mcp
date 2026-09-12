@@ -785,6 +785,7 @@ class EvolutionClient:
         filename: str | None = None,
         extract_text: bool = False,
         max_chars: int = 3000,
+        password: str | None = None,
     ) -> dict[str, Any]:
         """Baixa a mídia de uma mensagem e grava em disco.
 
@@ -797,9 +798,11 @@ class EvolutionClient:
             filename: nome do arquivo (padrão: nome original ou id + extensão)
             extract_text: se True, extrai texto de PDF/texto puro (requer pypdf para PDF)
             max_chars: limite de caracteres do texto extraído
+            password: senha de um PDF protegido. O arquivo é gravado **já destravado**,
+                      para seguir acessível sem depender de lembrar a senha
 
         Returns:
-            dict: {path, file, mime, size, type?, pages?, text?, text_truncated?, text_error?}
+            dict: {path, file, mime, size, type?, decrypted?, pages?, text?, text_truncated?, text_error?}
         """
         try:
             data = self.get_media(message_id)
@@ -853,9 +856,58 @@ class EvolutionClient:
         }
         if data.get("mediaType"):
             result["type"] = data["mediaType"]
+
+        if password:
+            if self._decrypt_pdf(path, password):
+                result["decrypted"] = True
+                content = path.read_bytes()
+                result["size"] = len(content)
+                self._log(f"PDF destravado: {path.name}")
+            else:
+                result["decrypted"] = False
+
         if extract_text:
             result.update(self._extract_text(path, mime, content, max_chars))
         return result
+
+    @staticmethod
+    def _decrypt_pdf(path: Path, password: str) -> bool:
+        """Remove a senha de um PDF, gravando a versão destravada por cima.
+
+        Returns:
+            bool: True se destravou, False se o arquivo não estava protegido.
+
+        Raises:
+            ValueError: senha incorreta, ou pypdf ausente
+        """
+        if path.suffix.lower() != ".pdf":
+            return False
+        try:
+            from pypdf import PdfReader, PdfWriter
+        except ImportError:
+            raise ValueError('pypdf não instalado (pip install -e ".[pdf]")')
+
+        try:
+            reader = PdfReader(str(path))
+            if not reader.is_encrypted:
+                return False
+            if not reader.decrypt(password):
+                raise ValueError(
+                    "Senha incorreta para este PDF. Boletos costumam pedir os primeiros "
+                    "dígitos do CPF do pagador."
+                )
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            temp = path.with_name(path.name + ".tmp")
+            with temp.open("wb") as fh:
+                writer.write(fh)
+            temp.replace(path)
+            return True
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Falha ao destravar o PDF: {e}")
 
     def _extract_text(self, path: Path, mime: str, content: bytes, max_chars: int) -> dict[str, Any]:
         """Extrai texto de PDF, texto puro ou áudio (transcrição). Nunca lança exceção."""
@@ -882,6 +934,8 @@ class EvolutionClient:
                 except ImportError:
                     return {"text_error": "pypdf não instalado (pip install pypdf)"}
                 reader = PdfReader(str(path))
+                if reader.is_encrypted:
+                    return {"text_error": "PDF protegido por senha. Repita a chamada informando password."}
                 pages = len(reader.pages)
                 parts: list[str] = []
                 total = 0
@@ -1107,6 +1161,7 @@ class EvolutionClient:
         message_id: str,
         folder: str,
         filename: str | None = None,
+        password: str | None = None,
     ) -> dict[str, Any]:
         """Baixa o anexo de uma mensagem e envia ao Drive, sem passar pela conversa.
 
@@ -1115,20 +1170,23 @@ class EvolutionClient:
             folder: caminho da pasta, relativo a EVOLUTION_DRIVE_ROOT
                     (ex: "MR/2026/08.2026/BOLETO")
             filename: nome final do arquivo (padrão: o nome original)
+            password: senha de um PDF protegido; a versão arquivada vai destravada
 
         Returns:
-            dict: {id, name, folder, size, link, source}
+            dict: {id, name, folder, size, link, decrypted?, source}
         """
         if not self.drive.available:
             raise DriveError(self.drive.describe()["hint"])
 
-        baixado = self.download_media(message_id, filename=filename)
+        baixado = self.download_media(message_id, filename=filename, password=password)
         enviado = self.drive.upload_file(
             baixado["path"],
             name=filename or baixado["file"],
             folder=folder,
             mime=baixado.get("mime"),
         )
+        if baixado.get("decrypted"):
+            enviado["decrypted"] = True
         enviado["source"] = {"message_id": message_id, "path": baixado["path"]}
         return enviado
 

@@ -242,3 +242,68 @@ def test_download_media_explains_message_without_content(client):
     client.responses.append(boom)
     with pytest.raises(EvolutionAPIError, match="salva sem conteúdo"):
         client.download_media("MSG1")
+
+
+# ---------------------------------------------------------------------------
+# PDF protegido por senha
+# ---------------------------------------------------------------------------
+
+def _pdf_protegido(senha="1234", texto=True):
+    """Gera um PDF cifrado em memória."""
+    pypdf = pytest.importorskip("pypdf")
+    import io
+
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt(senha)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def test_download_media_decrypts_pdf_with_password(client, tmp_path):
+    conteudo = _pdf_protegido("1234")
+    client.responses.append({
+        "fileName": "boleto.pdf", "mimetype": "application/pdf",
+        "base64": base64.b64encode(conteudo).decode(),
+    })
+    out = client.download_media("MSG1", password="1234")
+
+    assert out["decrypted"] is True
+    import pypdf
+    assert not pypdf.PdfReader(out["path"]).is_encrypted  # gravado sem senha
+
+
+def test_download_media_wrong_password(client):
+    client.responses.append({
+        "fileName": "boleto.pdf", "mimetype": "application/pdf",
+        "base64": base64.b64encode(_pdf_protegido("1234")).decode(),
+    })
+    with pytest.raises(ValueError, match="Senha incorreta"):
+        client.download_media("MSG1", password="9999")
+
+
+def test_download_media_password_on_open_pdf_is_noop(client):
+    pypdf = pytest.importorskip("pypdf")
+    import io
+
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    buf = io.BytesIO()
+    writer.write(buf)
+    client.responses.append({
+        "fileName": "aberto.pdf", "mimetype": "application/pdf",
+        "base64": base64.b64encode(buf.getvalue()).decode(),
+    })
+    out = client.download_media("MSG1", password="1234")
+    assert out["decrypted"] is False
+
+
+def test_encrypted_pdf_without_password_says_so(client):
+    client.responses.append({
+        "fileName": "boleto.pdf", "mimetype": "application/pdf",
+        "base64": base64.b64encode(_pdf_protegido("1234")).decode(),
+    })
+    out = client.download_media("MSG1", extract_text=True)
+    assert "protegido por senha" in out["text_error"]
+    assert "text" not in out

@@ -49,6 +49,11 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
   sem imprimir o segredo na tela
 - Configuração: `EVOLUTION_DRIVE_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`,
   `_ROOT_ID`, `_ROOT`
+- **PDF protegido por senha destravado no servidor**: `download_media` e
+  `archive_to_drive` aceitam `password` e gravam o arquivo já sem senha, usando pypdf.
+  Antes isso exigia `qpdf` na máquina do usuário, o que prendia o fluxo a uma sessão
+  com terminal; agora um chat comum dá conta. Sem a senha, um PDF cifrado volta com
+  `text_error` dizendo exatamente o que fazer
 - **Transcrição de áudios**: tool `transcribe_audio(message_id | file_path)` converte voice
   notes em texto no servidor, com cache por mensagem em `<media_dir>/.transcripts/`.
   Backends: API compatível com a OpenAI (OpenAI, Groq, whisper.cpp) ou `faster-whisper`

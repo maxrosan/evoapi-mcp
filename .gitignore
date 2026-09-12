@@ -49,3 +49,7 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# Credenciais geradas por scripts/google_oauth_setup.py (contêm segredos)
+google_drive_env.txt
+*_env.txt
