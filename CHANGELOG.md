@@ -87,6 +87,25 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 
 ---
 
+## [Não lançado]
+
+### 👀 Observação de eventos (primeiro passo do bot "IA:")
+
+- **Receptor de webhook da Evolution API** em `/webhook/<segredo>`, ativado por
+  `EVOLUTION_WEBHOOK_SECRET`. Nesta fase ele apenas registra o que chega: não responde,
+  não chama modelo nenhum e não grava em disco. Existe para responder à pergunta que
+  pode derrubar o plano do bot, que é se a Evolution avisa quando a mensagem é digitada
+  no celular do dono da instância
+- Leitura do que foi observado em `/webhook/<segredo>/log`, com filtros `minhas=1` e
+  `acionamentos=1`
+- O acionamento exige **duas** condições, `fromMe` e o prefixo `IA:`. Um terceiro
+  escrevendo "IA:" num grupo não aciona nada. A primeira versão errava isso e os
+  testes pegaram
+- Privacidade: no máximo 80 caracteres de prévia por mensagem, nunca conteúdo de mídia,
+  histórico só em memória
+
+---
+
 ## [1.1.0] - 2025-10-24
 
 ### 🐳 Docker & HTTP Support

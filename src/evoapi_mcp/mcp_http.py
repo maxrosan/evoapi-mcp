@@ -5,9 +5,12 @@ Substitui o wrapper usado no Easypanel: expõe as mesmas tools do `server.py`
 `http://0.0.0.0:$PORT/mcp`, exigindo o header `Authorization: Bearer $MCP_AUTH_TOKEN`.
 
 Variáveis de ambiente:
-    MCP_AUTH_TOKEN  obrigatória; token esperado no header Authorization
-    PORT            porta HTTP (padrão: 3000)
-    MCP_HOST        interface (padrão: 0.0.0.0)
+    MCP_AUTH_TOKEN            obrigatória; token esperado no header Authorization
+    PORT                      porta HTTP (padrão: 3000)
+    MCP_HOST                  interface (padrão: 0.0.0.0)
+    EVOLUTION_WEBHOOK_SECRET  opcional; ativa o receptor de eventos da Evolution
+                              em /webhook/<segredo>, e a leitura em
+                              /webhook/<segredo>/log. Sem ela as duas rotas não existem.
 
 Uso:
     python -m evoapi_mcp.mcp_http
@@ -15,6 +18,7 @@ Uso:
 """
 
 import hmac
+import json
 import os
 import sys
 from pathlib import Path
@@ -28,8 +32,14 @@ def build_app(token: str):
     """Monta o ASGI app: MCP streamable HTTP protegido por Bearer token."""
     from mcp.server.transport_security import TransportSecuritySettings
     from evoapi_mcp.server import mcp
+    from evoapi_mcp.webhook import EventLog
 
     expected = f"Bearer {token}".encode()
+
+    # Receptor de eventos da Evolution API. O segredo vai no caminho porque a
+    # configuração de webhook da Evolution nem sempre deixa mandar cabeçalho.
+    webhook_secret = os.environ.get("EVOLUTION_WEBHOOK_SECRET", "").strip()
+    eventos = EventLog()
 
     # Atrás de proxy (Easypanel/Traefik) o Host não é localhost: desliga a proteção de DNS rebinding
     mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
@@ -43,13 +53,47 @@ def build_app(token: str):
         })
         await send({"type": "http.response.body", "body": body})
 
+    async def read_body(receive) -> bytes:
+        corpo = b""
+        while True:
+            evento = await receive()
+            corpo += evento.get("body", b"")
+            if not evento.get("more_body"):
+                return corpo
+
     async def app(scope, receive, send):
         if scope["type"] == "http":
+            caminho = scope.get("path", "").rstrip("/")
+
             # /health fica fora da autenticação: é o que o Docker e o Easypanel
             # consultam para saber se o container subiu. Não expõe nada.
-            if scope.get("path", "").rstrip("/") == "/health":
+            if caminho == "/health":
                 await respond(send, 200, b'{"status":"healthy"}', b"application/json")
                 return
+
+            if webhook_secret and caminho.startswith(f"/webhook/{webhook_secret}"):
+                resto = caminho[len(f"/webhook/{webhook_secret}"):]
+                if resto == "/log":
+                    consulta = dict(
+                        p.split("=", 1) for p in scope.get("query_string", b"").decode().split("&") if "=" in p
+                    )
+                    dados = eventos.snapshot(
+                        limit=int(consulta.get("limit", 50) or 50),
+                        only_mine=consulta.get("minhas") == "1",
+                        only_triggers=consulta.get("acionamentos") == "1",
+                    )
+                    corpo = json.dumps(dados, ensure_ascii=False).encode()
+                    await respond(send, 200, corpo, b"application/json")
+                    return
+                if resto == "":
+                    try:
+                        payload = json.loads(await read_body(receive) or b"{}")
+                    except ValueError:
+                        payload = {"event": "?", "erro": "corpo inválido"}
+                    eventos.add(payload)
+                    # A Evolution só quer um 200; qualquer outra coisa vira reenvio.
+                    await respond(send, 200, b'{"ok":true}', b"application/json")
+                    return
 
             headers = dict(scope.get("headers") or [])
             provided = headers.get(b"authorization", b"")
@@ -71,6 +115,8 @@ def main() -> None:
     host = os.environ.get("MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "3000"))
     print(f"MCP streamable HTTP em http://{host}:{port}/mcp", file=sys.stderr)
+    if os.environ.get("EVOLUTION_WEBHOOK_SECRET", "").strip():
+        print("Receptor de eventos da Evolution ativo em /webhook/<segredo>", file=sys.stderr)
     uvicorn.run(build_app(token), host=host, port=port)
 
 
