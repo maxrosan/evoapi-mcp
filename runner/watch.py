@@ -255,7 +255,7 @@ def main() -> int:
 
         ids_antes = {p.get("id") for p in pend}
         descricao = "; ".join(
-            f"{p.get('chat', '?')} -> {str(p.get('instruction') or p.get('file') or '')[:50]!r}" for p in pend
+            f"{p.get('chat', '?')} -> {str(p.get('instrucao') or '')[:50]!r}" for p in pend
         )
         log.info("%d pendência(s): %s", len(pend), descricao)
 
