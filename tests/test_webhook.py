@@ -326,3 +326,63 @@ def test_react_done_nunca_derruba_o_tratamento(client):
         raise RuntimeError("Evolution fora do ar")
     client.responses.append(falha)
     assert client.react_done("120363@g.us", "MSG1") is False   # avisa e segue
+
+
+# ---------------------------------------------------------------------------
+# resposta com citação a uma mensagem do assistente
+# ---------------------------------------------------------------------------
+
+KEILLA = "558498140038@s.whatsapp.net"
+
+
+def evento_citando(texto, citada_id, citada_texto="Pode ser um vídeo qualquer?", from_me=True, msg_id="R1"):
+    e = evento(texto, from_me=from_me, jid=KEILLA)
+    e["data"]["key"]["id"] = msg_id
+    e["data"]["message"] = {"extendedTextMessage": {"text": texto, "contextInfo": {
+        "stanzaId": citada_id, "participant": "5584999290327@s.whatsapp.net",
+        "quotedMessage": {"conversation": citada_texto},
+    }}}
+    return e
+
+
+def test_citacao_de_mensagem_do_assistente_aciona_sem_prefixo():
+    log = EventLog(owner_number="5584999290327")
+    log.store.mark("Q1", instruction="[enviada pelo assistente]")
+    r = log.add(evento_citando("um vídeo pronto do YouTube sobre café", "Q1"))
+    assert r["trigger"] is True
+    assert r["instruction"] == "um vídeo pronto do YouTube sobre café"
+    assert r["reply_to"] == {"id": "Q1", "text": "Pode ser um vídeo qualquer?"}
+    assert log.pending()[0]["message_id"] == "R1"
+
+
+def test_citacao_de_mensagem_desconhecida_nao_aciona():
+    log = EventLog(owner_number="5584999290327")
+    r = log.add(evento_citando("um vídeo pronto do YouTube sobre café", "DESCONHECIDA"))
+    assert r.get("trigger") is None
+    assert r.get("reply_to") is None
+
+
+def test_terceiro_citando_o_assistente_nao_aciona():
+    log = EventLog(owner_number="5584999290327")
+    log.store.mark("Q1", instruction="[enviada pelo assistente]")
+    r = log.add(evento_citando("pode sim", "Q1", from_me=False))
+    assert r.get("trigger") is None
+
+
+def test_prefixo_com_citacao_carrega_o_contexto():
+    log = EventLog(owner_number="5584999290327")
+    log.store.mark("Q1", instruction="[enviada pelo assistente]")
+    r = log.add(evento_citando("IA: pode ser esse mesmo", "Q1"))
+    assert r["instruction"] == "pode ser esse mesmo"
+    assert r["reply_to"]["text"] == "Pode ser um vídeo qualquer?"
+
+
+def test_contextinfo_no_topo_de_data_tambem_vale():
+    log = EventLog(owner_number="5584999290327")
+    log.store.mark("Q1", instruction="[enviada pelo assistente]")
+    e = evento("sim, pode", jid=KEILLA,
+               extra={"contextInfo": {"stanzaId": "Q1", "quotedMessage": {"conversation": "Confirma?"}}})
+    e["data"]["key"]["id"] = "R2"
+    r = log.add(e)
+    assert r["trigger"] is True
+    assert r["reply_to"]["text"] == "Confirma?"

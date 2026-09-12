@@ -17,7 +17,7 @@ import sys
 import time
 from collections import deque
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from evoapi_mcp.formatters import clean, compact_message, jid_to_number
 from evoapi_mcp.store import build_store
@@ -82,7 +82,28 @@ def is_self_chat(remote_jid: str | None, alt_jid: str | None, owner_number: str 
     return dono in (_tail(remote_jid), _tail(alt_jid))
 
 
-def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, Any]:
+def quoted_of(dados: dict[str, Any]) -> dict[str, Any] | None:
+    """A mensagem citada numa resposta, ou None. Evolution põe o contextInfo ora
+    no topo de `data`, ora dentro do tipo da mensagem (extendedTextMessage...)."""
+    ctx = dados.get("contextInfo")
+    if not isinstance(ctx, dict) or not ctx.get("stanzaId"):
+        ctx = None
+        for valor in (dados.get("message") or {}).values():
+            if isinstance(valor, dict) and isinstance(valor.get("contextInfo"), dict) \
+                    and valor["contextInfo"].get("stanzaId"):
+                ctx = valor["contextInfo"]
+                break
+    if not ctx:
+        return None
+    citada = ctx.get("quotedMessage") or {}
+    texto = citada.get("conversation") or (citada.get("extendedTextMessage") or {}).get("text")
+    if not texto:
+        texto = next((v.get("caption") for v in citada.values() if isinstance(v, dict) and v.get("caption")), None)
+    return {"id": ctx["stanzaId"], "text": texto, "participant": ctx.get("participant")}
+
+
+def summarize_event(payload: Any, owner_number: str | None = None,
+                    replied_to_us: Callable[[str], bool] | None = None) -> dict[str, Any]:
     """Reduz um evento da Evolution ao que interessa.
 
     Campos: event, instance, at, from_me, chat, chat_type, self_chat, type,
@@ -125,7 +146,21 @@ def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, 
     instrucao = instruction_of(texto, self_chat=propria) if minha and not e_reacao else None
     aciona = bool(minha) and bool(instrucao) and (propria or is_trigger(texto))
 
+    # Terceira porta: o dono respondendo, com citação, a uma mensagem do assistente.
+    # Quando o assistente pergunta algo num chat com terceiro e Max responde citando
+    # a pergunta, é uma resposta a ele, não uma mensagem para o terceiro, mesmo sem
+    # "IA:". Só vale se a mensagem citada for conhecida (enviada ou tratada por nós):
+    # citar uma mensagem qualquer continua não acionando nada.
+    citada = quoted_of(dados)
+    responde_ao_assistente = bool(
+        minha and not e_reacao and citada and texto and replied_to_us and replied_to_us(citada["id"])
+    )
+    if responde_ao_assistente and not aciona:
+        instrucao = instruction_of(texto, self_chat=True)
+        aciona = bool(instrucao)
+
     resumo.update({
+        "reply_to": clean({"id": citada["id"], "text": citada.get("text")}) if citada and aciona else None,
         "message_id": key.get("id"),
         "from_me": minha,
         "chat": jid_to_number(jid) if jid else None,
@@ -193,7 +228,7 @@ class EventLog:
         return novos
 
     def add(self, payload: Any) -> dict[str, Any]:
-        resumo = summarize_event(payload, owner_number=self.owner_number)
+        resumo = summarize_event(payload, owner_number=self.owner_number, replied_to_us=self.store.is_handled)
         self._eventos.append(resumo)
         self.total += 1
         marca = " <<< ACIONAMENTO" if resumo.get("trigger") else ""

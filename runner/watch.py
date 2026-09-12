@@ -198,7 +198,7 @@ def acordar_claude() -> dict:
         "--mcp-config", str(escrever_mcp_config()),
         "--strict-mcp-config",
         "--permission-mode", "dontAsk",
-        "--allowedTools", "mcp__evoapi", "Skill", "Read",
+        "--allowedTools", "mcp__evoapi", "Skill", "Read", "WebSearch", "WebFetch",
         "--output-format", "json",
     ]
     inicio = time.time()

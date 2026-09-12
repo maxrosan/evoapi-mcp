@@ -715,7 +715,9 @@ def pending_triggers(limit: int = 10) -> str:
     - na conversa dele com ele mesmo (tipo_conversa "pessoal"), TODA mensagem é
       instrução, sem prefixo;
     - nas demais conversas e grupos, só o que começa com "IA:".
-    Mensagem de terceiro nunca entra aqui.
+    Mensagem de terceiro nunca entra aqui. Uma resposta do dono que **cita** uma
+    mensagem do assistente também entra, sem precisar de "IA:"; nesse caso
+    `respondendo_a` traz o texto citado, para saber a que pergunta ele respondeu.
 
     Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
 
@@ -732,6 +734,8 @@ def pending_triggers(limit: int = 10) -> str:
             "tipo_conversa": "pessoal" if e.get("self_chat") else e.get("chat_type"),
             "quando": e.get("at"),
             "instrucao": e.get("instruction"),
+            # Quando Max respondeu citando uma mensagem do assistente: o que ele citou.
+            "respondendo_a": (e.get("reply_to") or {}).get("text"),
         }))
     return _out({"count": len(pendentes), "pendentes": pendentes})
 

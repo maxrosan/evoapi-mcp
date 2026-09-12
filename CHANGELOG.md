@@ -254,6 +254,21 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 💬 Resposta com citação vale como instrução
+
+- Quando o assistente pergunta algo numa conversa com terceiro e Max responde
+  **citando** a pergunta, a resposta entra na fila sem precisar de "IA:". Só vale se
+  a mensagem citada for conhecida (enviada ou tratada pelo assistente); citar uma
+  mensagem qualquer continua não acionando nada, e terceiro citando não aciona nunca
+- `pending_triggers` ganha `respondendo_a` com o texto citado, para o executor saber a
+  que pergunta Max respondeu, mesmo sem lembrar da execução anterior
+- Executor: antes de agir num chat de terceiro, lê as últimas mensagens dele para ver
+  o próprio histórico; nunca marca como tratada sem responder no mesmo chat; ganha
+  `WebSearch`/`WebFetch` para pedidos como "ache um vídeo sobre X"
+- Motivação: um pedido "envie pra Keilla um vídeo" virou pergunta de confirmação no
+  chat da Keilla, Max respondeu lá com "IA:", e a execução seguinte, sem memória da
+  anterior, perguntou tudo de novo, ainda por cima na conversa pessoal dele
+
 ### 🖥️ Executor local (`runner/`)
 
 - **Substitui o laço `/loop 30s` no chat.** Um script no Windows (`runner/watch.py`)
