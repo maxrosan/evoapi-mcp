@@ -35,17 +35,26 @@ def build_app(token: str):
     mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     inner = mcp.streamable_http_app()
 
+    async def respond(send, status: int, body: bytes, content_type: bytes) -> None:
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", content_type), (b"content-length", str(len(body)).encode())],
+        })
+        await send({"type": "http.response.body", "body": body})
+
     async def app(scope, receive, send):
         if scope["type"] == "http":
+            # /health fica fora da autenticação: é o que o Docker e o Easypanel
+            # consultam para saber se o container subiu. Não expõe nada.
+            if scope.get("path", "").rstrip("/") == "/health":
+                await respond(send, 200, b'{"status":"healthy"}', b"application/json")
+                return
+
             headers = dict(scope.get("headers") or [])
             provided = headers.get(b"authorization", b"")
             if not hmac.compare_digest(provided, expected):
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain; charset=utf-8")],
-                })
-                await send({"type": "http.response.body", "body": b"Unauthorized"})
+                await respond(send, 401, b"Unauthorized", b"text/plain; charset=utf-8")
                 return
         await inner(scope, receive, send)
 
