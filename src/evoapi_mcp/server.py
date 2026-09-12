@@ -20,6 +20,7 @@ from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
+from evoapi_mcp.storage import sweep, usage
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
@@ -487,6 +488,49 @@ def archive_to_drive(
 
 
 @mcp.tool()
+def send_drive_file(
+    number: str,
+    file_ref: str | None = None,
+    folder: str | None = None,
+    name: str | None = None,
+    caption: str | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> str:
+    """Reenvia pelo WhatsApp um arquivo já arquivado no Drive por archive_to_drive.
+
+    Use para "manda de novo aquele boleto que arquivamos": o arquivo vai do Drive para
+    o servidor e do servidor para o WhatsApp, sem base64 na conversa e sem precisar que
+    ele ainda esteja no disco daqui.
+
+    Aponte o arquivo de um dos dois jeitos: por `file_ref` (o id ou o `link` que
+    archive_to_drive devolveu) ou por `folder` + `name`. Só alcança o que este servidor
+    arquivou — arquivo que outro aplicativo criou no Drive ele não enxerga.
+
+    Args:
+        number: internacional sem '+'
+        file_ref: id do arquivo no Drive, ou o link do arquivo
+        folder: pasta onde procurar, relativa à pasta base (ex: "MR/2026/08.2026/BOLETO")
+        name: nome do arquivo dentro dessa pasta
+        caption: legenda opcional
+        media_type: image|video|audio|document (padrão: deduzido do tipo no Drive)
+        file_name: nome exibido no WhatsApp (padrão: o nome no Drive)
+    Returns: {ok, id, to, ts, status, file: {path, size, type, drive_id, link}}
+    """
+    try:
+        result = client.send_drive_file(
+            number=number, file_ref=file_ref, folder=folder, name=name,
+            caption=caption, media_type=media_type, file_name=file_name,
+        )
+    except DriveError as e:
+        return _out({"error": str(e), "drive": client.drive.describe()})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
 def view_media(
     message_id: str,
     page: int = 1,
@@ -540,6 +584,25 @@ def get_media_base64(message_id: str) -> str:
 # ============================================================================
 
 @mcp.tool()
+def cleanup_media(days: int | None = None, dry_run: bool = False) -> str:
+    """Apaga da pasta de mídias os arquivos mais velhos que `days`.
+
+    A faxina já roda sozinha uma vez por dia (EVOLUTION_MEDIA_TTL_DAYS). Use esta
+    tool quando o disco apertar antes disso, ou com dry_run=True para ver o que
+    sairia. Texto de áudio já transcrito (.transcripts) nunca é apagado.
+
+    Args:
+        days: idade máxima em dias (padrão: EVOLUTION_MEDIA_TTL_DAYS)
+        dry_run: só conta, não apaga
+    Returns: {removed, freed_mb, ttl_days, media: {files, mb, free_mb}}
+    """
+    ttl = config.media_ttl_days if days is None else days
+    resultado = sweep(client.media_dir, ttl_days=ttl, dry_run=dry_run)
+    resultado["media"] = usage(client.media_dir)
+    return _out(resultado)
+
+
+@mcp.tool()
 def get_connection_status() -> str:
     """Estado da conexão da instância. Returns: {instance, state}"""
     response = client.get_connection_state()
@@ -567,6 +630,7 @@ def get_instance_info(full: bool = False) -> str:
         info.pop("info", None)
     info["transcription"] = client.transcriber.describe()
     info["drive"] = client.drive.describe()
+    info["media"] = usage(client.media_dir) | {"ttl_days": config.media_ttl_days}
     from evoapi_mcp.webhook import EVENTS
     info["armazenamento"] = EVENTS.store.describe()
     return _out(info)

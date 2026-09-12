@@ -12,8 +12,12 @@ import sys
 
 from .client import EvolutionClient
 from .config import load_config
+from .drive import DriveError
 from .formatters import compact_chat, compact_contact, compact_send_result
+from .rendering import RenderError
+from .storage import sweep, usage
 from .transcription import TranscriptionError
+from .weblink import WebLinkError
 
 # =============================================================================
 # FASTAPI APP
@@ -118,6 +122,54 @@ class DownloadMediaRequest(BaseModel):
     extract_text: bool = Field(False, description="Extrair texto de PDF/txt")
     max_chars: int = Field(3000, description="Limite do texto extraído")
     password: str | None = Field(None, description="Senha de um PDF protegido")
+
+
+class SendRenderRequest(BaseModel):
+    number: str = Field(..., description="Número de telefone")
+    svg: str = Field(..., description="Documento SVG a rasterizar")
+    caption: str | None = Field(None, description="Legenda")
+    file_name: str = Field("imagem.png", description="Nome exibido no WhatsApp")
+    width: int | None = Field(None, description="Largura em pixels")
+    height: int | None = Field(None, description="Altura em pixels")
+    background: str | None = Field("white", description="Cor de fundo (null = transparente)")
+
+
+class SendUrlRequest(BaseModel):
+    number: str = Field(..., description="Número de telefone")
+    url: str = Field(..., description="Endereço público do arquivo")
+    caption: str | None = Field(None, description="Legenda")
+    media_type: str | None = Field(None, description="image/video/audio/document")
+    file_name: str | None = Field(None, description="Nome exibido no WhatsApp")
+
+
+class SendDriveFileRequest(BaseModel):
+    number: str = Field(..., description="Número de telefone")
+    file_ref: str | None = Field(None, description="Id ou link do arquivo no Drive")
+    folder: str | None = Field(None, description="Pasta onde procurar, com name")
+    name: str | None = Field(None, description="Nome do arquivo dentro da pasta")
+    caption: str | None = Field(None, description="Legenda")
+    media_type: str | None = Field(None, description="image/video/audio/document")
+    file_name: str | None = Field(None, description="Nome exibido no WhatsApp")
+
+
+class ArchiveRequest(BaseModel):
+    message_id: str | None = Field(None, description="Id da mensagem com o anexo")
+    file_path: str | None = Field(None, description="Arquivo já no servidor")
+    folder: str = Field("", description="Pasta destino, relativa à pasta base")
+    filename: str | None = Field(None, description="Nome final do arquivo")
+    password: str | None = Field(None, description="Senha de um PDF protegido")
+
+
+class ViewMediaRequest(BaseModel):
+    message_id: str = Field(..., description="Id da mensagem com o anexo")
+    page: int = Field(1, description="Primeira página (PDF)")
+    pages: int = Field(1, description="Quantas páginas, no máximo 5")
+    password: str | None = Field(None, description="Senha de um PDF protegido")
+
+
+class CleanupMediaRequest(BaseModel):
+    days: int | None = Field(None, description="Idade máxima em dias (padrão: EVOLUTION_MEDIA_TTL_DAYS)")
+    dry_run: bool = Field(False, description="Só conta, não apaga")
 
 
 # =============================================================================
@@ -353,6 +405,88 @@ async def send_base64(request: SendBase64Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/messages/render", response_model=dict[str, Any])
+async def send_render(request: SendRenderRequest):
+    """Rasteriza um SVG no servidor e envia o PNG."""
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    try:
+        result = client.send_render(
+            number=request.number,
+            svg=request.svg,
+            caption=request.caption,
+            file_name=request.file_name,
+            width=request.width,
+            height=request.height,
+            background=request.background,
+        )
+        out = compact_send_result(result)
+        if isinstance(result, dict) and result.get("_file"):
+            out["file"] = result["_file"]
+        return out
+    except RenderError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/messages/url", response_model=dict[str, Any])
+async def send_url(request: SendUrlRequest):
+    """Baixa o arquivo da URL no servidor e o envia."""
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    try:
+        result = client.send_url(
+            number=request.number,
+            url=request.url,
+            caption=request.caption,
+            media_type=request.media_type,
+            file_name=request.file_name,
+        )
+        out = compact_send_result(result)
+        if isinstance(result, dict) and result.get("_file"):
+            out["file"] = result["_file"]
+        return out
+    except WebLinkError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/messages/drive", response_model=dict[str, Any])
+async def send_drive_file(request: SendDriveFileRequest):
+    """Reenvia pelo WhatsApp um arquivo arquivado no Drive por este servidor."""
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    try:
+        result = client.send_drive_file(
+            number=request.number,
+            file_ref=request.file_ref,
+            folder=request.folder,
+            name=request.name,
+            caption=request.caption,
+            media_type=request.media_type,
+            file_name=request.file_name,
+        )
+        out = compact_send_result(result)
+        if isinstance(result, dict) and result.get("_file"):
+            out["file"] = result["_file"]
+        return out
+    except DriveError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # ENDPOINTS - MEDIA
 # =============================================================================
@@ -408,6 +542,84 @@ async def transcribe_audio(request: TranscribeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/media/archive", response_model=dict[str, Any])
+async def archive_to_drive(request: ArchiveRequest):
+    """Arquiva no Google Drive um anexo do WhatsApp, ou um arquivo já no servidor."""
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    if bool(request.message_id) == bool(request.file_path):
+        raise HTTPException(status_code=400, detail="Informe message_id OU file_path")
+
+    try:
+        if request.message_id:
+            return client.archive_media(
+                message_id=request.message_id,
+                folder=request.folder,
+                filename=request.filename,
+                password=request.password,
+            )
+        return client.archive_file(
+            file_path=request.file_path,
+            folder=request.folder,
+            filename=request.filename,
+        )
+    except DriveError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/media/view", response_model=dict[str, Any])
+async def view_media(request: ViewMediaRequest):
+    """Renderiza o documento como imagem.
+
+    Diferente da tool MCP, que entrega a imagem pelo protocolo, aqui as páginas voltam
+    em base64: um cliente REST sabe decodificar, e não é ele que paga tokens.
+    """
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    import base64 as _b64
+
+    try:
+        resultado = client.render_media(
+            message_id=request.message_id,
+            first_page=request.page,
+            pages=request.pages,
+            password=request.password,
+        )
+    except RenderError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "file": resultado.get("file"),
+        "mime": resultado.get("mime"),
+        "size": resultado.get("size"),
+        "pages_rendered": resultado.get("pages_rendered"),
+        "format": resultado.get("format"),
+        "images": [_b64.b64encode(img).decode("ascii") for img in resultado["images"]],
+    }
+
+
+@app.post("/media/cleanup", response_model=dict[str, Any])
+async def cleanup_media(request: CleanupMediaRequest):
+    """Apaga da pasta de mídias o que passou do prazo."""
+    if not client:
+        raise HTTPException(status_code=503, detail="Cliente não inicializado")
+
+    # A configuração já está no cliente; recarregar o .env a cada request só
+    # criaria um jeito de o endpoint falhar por motivo que nada tem a ver com ele.
+    ttl = getattr(client.config, "media_ttl_days", 0) if request.days is None else request.days
+    resultado = sweep(client.media_dir, ttl_days=ttl, dry_run=request.dry_run)
+    resultado["media"] = usage(client.media_dir)
+    return resultado
+
+
 # =============================================================================
 # ENDPOINTS - INSTANCE & PRESENCE
 # =============================================================================
@@ -419,7 +631,11 @@ async def get_instance_status():
         raise HTTPException(status_code=503, detail="Cliente não inicializado")
 
     try:
-        return client.get_instance_info()
+        info = client.get_instance_info()
+        # Uso de disco junto do status: é aqui que alguém olha quando algo parou,
+        # e "disco cheio" não se anuncia sozinho nas outras mensagens de erro.
+        info["media"] = usage(client.media_dir)
+        return info
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

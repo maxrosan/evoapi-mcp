@@ -43,6 +43,44 @@ custando o arquivo inteiro dentro da conversa. Duas rotas novas fecham isso.
 - `send_image_base64` e `send_image` passam a apontar a alternativa barata na própria descrição,
   que é o que o modelo lê na hora de escolher a tool
 
+### 🧹 Manutenção do servidor
+
+- **Faxina do `media_dir`**: nada apagava nada, e num container o disco cheio derruba
+  download, envio, transcrição e arquivamento de uma vez, com erros que não falam em disco.
+  Agora a pasta tem prazo (`EVOLUTION_MEDIA_TTL_DAYS`, padrão 30 dias), varrido no máximo
+  uma vez por dia por quem grava, com a tool `cleanup_media(days?, dry_run?)` para adiantar.
+  `.transcripts` nunca é apagado, e o uso de disco aparece em `get_instance_info` e em
+  `GET /instance/status`. Novo módulo `storage.py`
+- **`send_drive_file(number, file_ref? | folder+name, ...)`**: fecha o ciclo do
+  `archive_to_drive`, que era mão única — arquivo guardado no Drive volta ao WhatsApp sem
+  depender da cópia local. `DriveClient` ganhou `download_file`, `get_metadata`,
+  `find_in_folder` e `file_id_from` (aceita id ou link). Continua no escopo `drive.file`:
+  alcança o que este servidor criou, sem escopo restrito nem arquivo público
+
+### 🔧 Infraestrutura
+
+- **CI no GitHub Actions**: pytest em Python 3.10, 3.11 e 3.12 com os extras instalados
+  (incluindo `libcairo2`, para que os testes de rasterização rodem em vez de serem pulados),
+  o servidor MCP subindo e listando as tools, e um job que constrói a imagem Docker e
+  confere que ela rasteriza — dependência de sistema faltando só aparece ali
+- **API REST alinhada com as tools**: `POST /messages/render`, `/messages/url`,
+  `/messages/drive`, `/media/archive`, `/media/view` e `/media/cleanup`. As duas superfícies
+  vinham divergindo em silêncio; um teste agora falha se um envio existir só no MCP
+- Primeiros testes do `http_server.py`, que não tinha nenhum
+
+### 🔒 Segurança
+
+- O token da instância Evolution, commitado em quatro arquivos desde os primeiros commits,
+  foi trocado por placeholder. **Ele continua no histórico do git e válido até ser rotacionado
+  no painel da Evolution** — está registrado no `TODO.md`
+
+### 📚 Documentação
+
+- `ROADMAP.md`, `KNOWN_ISSUES.md`, `NEXT_STEPS.md`, `SUMMARY.md` e `FIXES.md` foram removidos:
+  descreviam o projeto de outubro de 2025, com a biblioteca `evolutionapi` que já saiu, tools
+  que não existem mais e pendências já resolvidas. `TODO.md` foi reescrito com o que é verdade
+  hoje; `README.md` e `CHANGELOG.md` seguem como os documentos vivos
+
 ---
 
 ## [1.2.0] - 2026-09-11

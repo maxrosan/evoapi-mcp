@@ -14,6 +14,7 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_INSTANCE_NAME: Nome da instância WhatsApp configurada
     - EVOLUTION_TIMEOUT: (Opcional) Timeout para requisições em segundos (padrão: 30)
     - EVOLUTION_MEDIA_DIR: (Opcional) Pasta onde mídias baixadas são salvas
+    - EVOLUTION_MEDIA_TTL_DAYS: (Opcional) Idade máxima dos arquivos dessa pasta, em dias
       (padrão: ~/.evoapi-mcp/media)
     - EVOLUTION_DEFAULT_LIMIT: (Opcional) Quantidade padrão de itens em listagens (padrão: 20)
     - EVOLUTION_MAX_TEXT_CHARS: (Opcional) Corte de texto por mensagem no modo compacto (padrão: 500)
@@ -57,6 +58,12 @@ class EvolutionConfig(BaseSettings):
     media_dir: str = Field(
         default="~/.evoapi-mcp/media",
         description="Pasta onde mídias baixadas do WhatsApp são salvas"
+    )
+    media_ttl_days: int = Field(
+        default=30,
+        description="Idade máxima dos arquivos em media_dir, em dias (0 desliga a faxina)",
+        ge=0,
+        le=3650
     )
     default_limit: int = Field(
         default=20,
@@ -174,6 +181,7 @@ def load_config() -> EvolutionConfig:
             f"  Instância: {config.instance_name}",
             f"  Timeout: {config.timeout}s",
             f"  Media dir: {config.media_dir}",
+            f"  Media TTL: {config.media_ttl_days} dia(s)" if config.media_ttl_days else "  Media TTL: desligado",
             sep="\n",
             file=sys.stderr
         )

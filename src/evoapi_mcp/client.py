@@ -26,6 +26,7 @@ from evoapi_mcp.formatters import (
 )
 from evoapi_mcp.drive import DriveClient, DriveError
 from evoapi_mcp.rendering import RenderError, is_renderable, render, render_svg
+from evoapi_mcp.storage import sweep_if_due
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
 from evoapi_mcp.weblink import fetch as fetch_url
 
@@ -769,6 +770,18 @@ class EvolutionClient:
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
         return name[:150] or "media"
 
+    def _faxina(self) -> None:
+        """Faxina da pasta de mídias, disparada por quem acabou de gravar.
+
+        Fica aqui, e não num agendador, porque o servidor não tem um: quem grava é
+        quem enche o disco, então é ele quem paga a conta. `sweep_if_due` desiste
+        na hora se já varreu nas últimas 24h, e falha nunca atrapalha o envio.
+        """
+        try:
+            sweep_if_due(self.media_dir, int(getattr(self.config, "media_ttl_days", 0) or 0))
+        except Exception as e:
+            self._log(f"faxina da pasta de mídias falhou: {e}", "WARN")
+
     def _unique_path(self, directory: Path, filename: str) -> Path:
         candidate = directory / filename
         if not candidate.exists():
@@ -849,6 +862,7 @@ class EvolutionClient:
         path = self._unique_path(directory, self._safe_filename(filename))
         path.write_bytes(content)
         self._log(f"Mídia salva em {path} ({len(content)} bytes)")
+        self._faxina()
 
         result: dict[str, Any] = {
             "path": str(path),
@@ -1097,6 +1111,7 @@ class EvolutionClient:
         path = self._unique_path(directory, nome)
         path.write_bytes(png)
         self._log(f"SVG rasterizado em {path} ({len(png)} bytes)")
+        self._faxina()
 
         return self.send_file(
             number=number,
@@ -1154,6 +1169,7 @@ class EvolutionClient:
         path = self._unique_path(directory, nome)
         path.write_bytes(baixado["content"])
         self._log(f"Arquivo de {baixado['url']} salvo em {path} ({len(baixado['content'])} bytes)")
+        self._faxina()
 
         result = self.send_media_base64(
             number=number,
@@ -1169,6 +1185,78 @@ class EvolutionClient:
                 "size": len(baixado["content"]),
                 "type": media_type,
                 "url": baixado["url"],
+            })
+        return result
+
+    def send_drive_file(
+        self,
+        number: str,
+        file_ref: str | None = None,
+        folder: str | None = None,
+        name: str | None = None,
+        caption: str | None = None,
+        media_type: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Reenvia pelo WhatsApp um arquivo que este servidor arquivou no Drive.
+
+        Fecha o ciclo do `archive_to_drive`, que até aqui era mão única: o boleto
+        arquivado em agosto voltava a ser alcançável só enquanto a cópia local
+        existisse. Nada disso passa pela conversa — o arquivo vai do Drive para o
+        servidor e do servidor para o WhatsApp.
+
+        Args:
+            number: Número de destino
+            file_ref: id do arquivo ou o link devolvido por archive_to_drive
+            folder: caminho da pasta, quando for procurar por nome (ex: "MR/2026/08.2026/BOLETO")
+            name: nome do arquivo dentro dessa pasta
+            caption: Legenda opcional
+            media_type: image/video/audio/document (padrão: deduzido do tipo no Drive)
+            file_name: Nome exibido no WhatsApp (padrão: o nome no Drive)
+
+        Raises:
+            DriveError: Drive não configurado, arquivo não encontrado ou grande demais
+        """
+        if file_ref:
+            file_id = self.drive.file_id_from(file_ref)
+        elif name:
+            file_id = self.drive.find_in_folder(folder or "", name)
+        else:
+            raise DriveError("Informe file_ref (id ou link) ou name (com folder).")
+
+        baixado = self.drive.download_file(file_id)
+        mime = baixado["mime"]
+        nome = self._safe_filename(file_name or baixado["name"])
+
+        if not media_type:
+            raiz = mime.split("/")[0]
+            media_type = (
+                raiz if raiz in ("image", "video", "audio")
+                else _EXT_MEDIA_TYPE.get(Path(nome).suffix.lower(), "document")
+            )
+
+        directory = self.media_dir / "drive"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(baixado["content"])
+        self._log(f"Arquivo {baixado['name']} trazido do Drive para {path}")
+        self._faxina()
+
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(baixado["content"]).decode("ascii"),
+            media_type=media_type,
+            file_name=nome,
+            caption=caption,
+            mimetype=mime or mimetypes.guess_type(nome)[0],
+        )
+        if isinstance(result, dict):
+            result.setdefault("_file", {
+                "path": str(path),
+                "size": baixado["size"],
+                "type": media_type,
+                "drive_id": file_id,
+                "link": baixado.get("link"),
             })
         return result
 

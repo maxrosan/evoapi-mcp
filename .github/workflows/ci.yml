@@ -1,0 +1,85 @@
+# Os testes só valem se alguém os roda. Aqui eles rodam a cada push e a cada PR,
+# incluindo o que quebra fora da máquina de quem desenvolve: o build da imagem.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 é o mínimo declarado no pyproject; 3.11 é o da imagem Docker.
+        python: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # cairosvg abre a libcairo do sistema por dlopen. Sem este passo os testes
+      # de send_render passariam pulados, que é pior que falhar: ninguém percebe.
+      - name: Instalar libcairo2
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+
+      # [audio] fica de fora de propósito: faster-whisper puxa centenas de MB e os
+      # testes de transcrição injetam o backend em vez de usá-lo.
+      - name: Instalar o projeto
+        run: pip install -e ".[dev,pdf,image,svg,bot,db]"
+
+      - name: Conferir que as dependências opcionais entraram
+        run: |
+          python -c "import cairosvg, pypdfium2, PIL, pypdf, anthropic; print('extras ok')"
+
+      - name: pytest
+        run: pytest -q
+
+      # As tools são a interface do servidor: um erro de assinatura ou um import
+      # circular só aparece quando o servidor sobe de verdade.
+      - name: Subir o servidor MCP e listar as tools
+        env:
+          EVOLUTION_BASE_URL: http://evolution.invalido
+          EVOLUTION_API_TOKEN: token-de-teste
+          EVOLUTION_INSTANCE_NAME: ci
+        run: |
+          python - <<'PY'
+          import asyncio
+          from evoapi_mcp.server import mcp
+          tools = asyncio.run(mcp.list_tools())
+          nomes = sorted(t.name for t in tools)
+          print(f"{len(nomes)} tools: {', '.join(nomes)}")
+          faltando = {"send_render", "send_url", "send_file", "archive_to_drive"} - set(nomes)
+          assert not faltando, f"tools sumiram: {faltando}"
+          PY
+
+  imagem:
+    # O deploy roda a imagem, não o venv de ninguém: dependência de sistema que
+    # falta (libcairo2, por exemplo) só aparece aqui.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build da imagem
+        run: docker build -f docker/Dockerfile --build-arg INSTALL_AUDIO=false -t evoapi-mcp:ci .
+
+      - name: Conferir que o servidor importa dentro da imagem
+        run: |
+          docker run --rm \
+            -e EVOLUTION_BASE_URL=http://evolution.invalido \
+            -e EVOLUTION_API_TOKEN=token-de-teste \
+            -e EVOLUTION_INSTANCE_NAME=ci \
+            evoapi-mcp:ci python -c "
+          import cairosvg
+          from evoapi_mcp.server import mcp
+          from evoapi_mcp.rendering import render_svg
+          png = render_svg('<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg>')
+          assert png[:4] == b'\x89PNG', 'a rasterização não funcionou na imagem'
+          print('imagem ok: rasteriza e importa')
+          "

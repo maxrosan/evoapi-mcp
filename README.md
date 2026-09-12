@@ -54,6 +54,8 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ `send_file` envia arquivo local sem passar base64 pelo chat
 - ✅ `send_render` desenha a imagem a partir do SVG do modelo: o desenho viaja como texto
 - ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
+- ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
+- ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
 - ✅ Extração de texto de PDF/txt (`extract_text=True`) para identificar documentos sem abri-los
 - ✅ Busca textual local em `find_messages`/`get_chat_messages` (só as mensagens que casam voltam)
 - ✅ Limites padrão menores (20 itens) e corte de texto configurável
@@ -195,6 +197,45 @@ Por segurança, o download só sai para endereço público: `http`/`https`, e to
 redirecionamento é conferido, para que o servidor não sirva de ponte para a rede interna
 a partir de um link que chegou pelo WhatsApp.
 
+### Reenviar o que já foi arquivado no Drive
+
+`archive_to_drive` era mão única: o boleto guardado em agosto só voltava a ser
+alcançável enquanto a cópia local existisse. `send_drive_file` fecha o ciclo:
+
+```
+send_drive_file(number="5511999999999", file_ref="<id ou o link que archive_to_drive devolveu>")
+send_drive_file(number="5511999999999", folder="MR/2026/08.2026/BOLETO", name="boleto.pdf")
+```
+
+O arquivo vai do Drive para o servidor e do servidor para o WhatsApp, sem base64 na
+conversa e sem depender de o arquivo ainda estar no disco daqui. Só alcança o que
+**este servidor** arquivou: o escopo `drive.file` dá acesso ao que o próprio app criou,
+e é justamente por isso que não é preciso escopo restrito, verificação do Google nem
+tornar nada público.
+
+### Faxina da pasta de mídias
+
+Tudo que o servidor toca vira arquivo: anexo baixado, PNG rasterizado, download de URL,
+arquivo trazido do Drive. Num container o disco é pequeno, e quando ele enche não quebra
+só o download — quebra envio, transcrição e arquivamento ao mesmo tempo, com mensagens de
+erro que não falam em disco.
+
+Por isso a pasta tem prazo de validade:
+
+```bash
+EVOLUTION_MEDIA_TTL_DAYS=30   # padrão; 0 desliga
+```
+
+A varredura roda sozinha no máximo uma vez por dia, disparada por quem grava. Para
+adiantar, ou só para ver o que sairia:
+
+```
+cleanup_media(days=7, dry_run=True)
+```
+
+Texto de áudio já transcrito (`.transcripts`) nunca é apagado: é barato de guardar e caro
+de refazer. O uso de disco aparece em `get_instance_info` e em `GET /instance/status`.
+
 ### PDFs protegidos por senha
 
 Boletos costumam vir cifrados. Passe a senha e o arquivo é gravado **já destravado**,
@@ -305,9 +346,9 @@ EVOLUTION_TIMEOUT=30
 
 **Exemplo real:**
 ```bash
-EVOLUTION_BASE_URL=https://pevo.ntropy.com.br
-EVOLUTION_API_TOKEN=9795FDFBB464-495E-A823-28573A5D39EE
-EVOLUTION_INSTANCE_NAME=personal_pablo_bispo_wpp
+EVOLUTION_BASE_URL=https://sua-instancia-evolution.exemplo.com
+EVOLUTION_API_TOKEN=SEU-TOKEN-DA-EVOLUTION
+EVOLUTION_INSTANCE_NAME=sua-instancia
 EVOLUTION_TIMEOUT=15
 ```
 
@@ -526,40 +567,23 @@ uv run evoapi-mcp
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ O que falta
 
-Veja o arquivo [ROADMAP.md](ROADMAP.md) para planos futuros:
+O pendente de verdade está em **[TODO.md](TODO.md)** — em resumo: gerenciamento de
+grupos, retry com backoff nas chamadas à Evolution, upload resumível no Drive (hoje o
+arquivamento corta em 5 MB) e apagar/editar/reagir a mensagem.
 
-### 🔴 FASE 1 - Correções Críticas (Curto Prazo)
-- [ ] Unificar duplicações de código
-- [ ] Adicionar validações robustas
-- [ ] Cache com TTL
-
-### 🟡 FASE 2 - Melhorias de Qualidade (Médio Prazo)
-- [ ] Type safety com Pydantic
-- [ ] Retry logic automático
-- [ ] Sanitização de logs
-
-### 🟢 FASE 3 - Novas Funcionalidades (Longo Prazo)
-- [ ] Gerenciamento de grupos
-- [ ] Deletar/editar mensagens
-- [ ] Upload de arquivos locais
-- [ ] Download de mídias recebidas
-- [ ] Status (stories)
-
-### 🧪 FASE 4 - DevOps
-- [ ] Testes automatizados
-- [ ] CI/CD com GitHub Actions
-- [ ] Documentação completa
+O que já foi feito está no **[CHANGELOG.md](CHANGELOG.md)**, que é o histórico vivo
+do projeto.
 
 ---
 
-## 📚 Documentação Adicional
+## 📚 Documentação
 
-- **[ROADMAP.md](ROADMAP.md)** - Plano de desenvolvimento futuro
-- **[TODO.md](TODO.md)** - Tarefas pendentes organizadas
-- **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)** - Problemas conhecidos e soluções
-- **[FIXES.md](FIXES.md)** - Histórico de correções aplicadas
+- **[README.md](README.md)** - este arquivo: o que o servidor faz e como usar
+- **[INSTALL.md](INSTALL.md)** - instalação no Claude Desktop
+- **[CHANGELOG.md](CHANGELOG.md)** - o que mudou em cada versão
+- **[TODO.md](TODO.md)** - o que está pendente
 
 ---
 
