@@ -254,6 +254,21 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🗣️ Texto para voz: `send_voice`
+
+- Nova tool `send_voice(number, text, voice=None)`: gera a fala e envia como **nota de
+  voz** (a de forma de onda), não como arquivo. É o caminho inverso da transcrição
+- Dois backends em `speech.py`: `edge` (vozes neurais do Microsoft Edge via `edge-tts`,
+  sem chave, com vozes brasileiras: Francisca, Antonio, Thalita) e `api` (qualquer
+  endpoint compatível com `/v1/audio/speech` da OpenAI, com `EVOLUTION_TTS_API_KEY`).
+  `auto` prefere a API quando há chave, senão o Edge. Padrão: `pt-BR-FranciscaNeural`
+- O MP3 fica em `media_dir/voz`, e o mesmo texto na mesma voz reaproveita o arquivo;
+  a Evolution converte para o formato de nota de voz no envio
+- Novo extra `[speech]` no pyproject e no Dockerfile; `get_instance_info` expõe `speech`
+- Executor: pedidos "em áudio" passam a usar `send_voice`
+- Motivação: "explique para Keilla em áudio" saiu em texto, porque não existia o
+  caminho texto → voz. O servidor só transcrevia
+
 ### 💬 Resposta com citação vale como instrução
 
 - Quando o assistente pergunta algo numa conversa com terceiro e Max responde

@@ -22,6 +22,10 @@ pdf = [
 audio = [
     "faster-whisper>=1.0.0",
 ]
+# Texto para voz sem chave, com vozes brasileiras (Microsoft Edge). Ver speech.py.
+speech = [
+    "edge-tts>=7.0.0",
+]
 image = [
     "pypdfium2>=4.30.0",
     "pillow>=10.0.0",

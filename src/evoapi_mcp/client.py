@@ -26,6 +26,7 @@ from evoapi_mcp.formatters import (
 )
 from evoapi_mcp.drive import DriveClient, DriveError
 from evoapi_mcp.rendering import RenderError, is_renderable, render, render_svg
+from evoapi_mcp.speech import Speaker, SpeechError
 from evoapi_mcp.storage import sweep_if_due
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
 from evoapi_mcp.weblink import fetch as fetch_url
@@ -93,6 +94,7 @@ class EvolutionClient:
         self.timeout = config.timeout
         self.media_dir = Path(config.media_dir)
         self.transcriber = Transcriber(config)
+        self.speaker = Speaker(config)
         self.drive = DriveClient(config)
 
         # Headers padrão para todas as requisições
@@ -1065,6 +1067,26 @@ class EvolutionClient:
         )
         if isinstance(result, dict):
             result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
+        return result
+
+    def send_voice(self, number: str, text: str, voice: str | None = None) -> dict[str, Any]:
+        """Gera a voz a partir do texto e envia como nota de voz (PTT).
+
+        O áudio fica em media_dir/voz; o mesmo texto na mesma voz reaproveita o
+        arquivo. A Evolution converte o MP3 para o formato de nota de voz.
+        """
+        path = self.speaker.synthesize(text, voice=voice)  # SpeechError sobe para a tool
+        content = path.read_bytes()
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(content).decode("ascii"),
+            media_type="audio",
+        )
+        if isinstance(result, dict):
+            result.setdefault("_voice", {
+                "path": str(path), "size": len(content), "chars": len(text or ""),
+                "voice": (voice or "").strip() or self.speaker.voice, "backend": self.speaker.active_backend,
+            })
         return result
 
     def send_reaction(

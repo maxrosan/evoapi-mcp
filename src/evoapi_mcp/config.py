@@ -25,6 +25,8 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_TRANSCRIBE_API_URL: endpoint compatível com a API da OpenAI
     - EVOLUTION_TRANSCRIBE_API_KEY: chave da API (ou use OPENAI_API_KEY / GROQ_API_KEY)
     - EVOLUTION_TRANSCRIBE_MODEL: modelo (padrão: whisper-1 na API, small no local)
+    - EVOLUTION_TTS_BACKEND / _VOICE / _API_URL / _API_KEY / _MODEL: texto para voz
+      (ver speech.py). Sem nada configurado usa edge-tts, se instalado
     - EVOLUTION_TRANSCRIBE_LANGUAGE: idioma dos áudios, ex: pt (padrão: detectar)
     - EVOLUTION_TRANSCRIBE_TIMEOUT: timeout da transcrição em segundos (padrão: 120)
     - EVOLUTION_TRANSCRIBE_MAX_MB: tamanho máximo aceito pela API (padrão: 25)
@@ -104,6 +106,32 @@ class EvolutionConfig(BaseSettings):
         description="Timeout da transcrição em segundos",
         ge=10,
         le=1800
+    )
+    tts_backend: str = Field(
+        default="auto",
+        description="Backend de texto para voz: auto, edge, api ou off"
+    )
+    tts_voice: str = Field(
+        default="",
+        description="Voz (padrão: pt-BR-FranciscaNeural no edge, nova na API)"
+    )
+    tts_api_url: str = Field(
+        default="",
+        description="Endpoint de voz compatível com /v1/audio/speech da OpenAI"
+    )
+    tts_api_key: str = Field(
+        default="",
+        description="Chave do serviço de voz (ou use OPENAI_API_KEY)"
+    )
+    tts_model: str = Field(
+        default="",
+        description="Modelo de voz na API (padrão: gpt-4o-mini-tts)"
+    )
+    tts_timeout: int = Field(
+        default=60,
+        description="Timeout da geração de voz em segundos",
+        ge=5,
+        le=600
     )
     transcribe_max_mb: int = Field(
         default=25,

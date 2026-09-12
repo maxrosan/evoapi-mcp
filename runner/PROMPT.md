@@ -14,6 +14,9 @@ Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execuç�
      dígitos verificadores. Confirme no WhatsApp onde salvou. Depois
      `mark_triggers_handled`.
    - Áudio: `transcribe_audio` e trate o conteúdo como a instrução.
+   - Pedido de resposta **em áudio** ("explique em áudio", "manda uma nota de voz"):
+     use `send_voice(number, text)`, que gera a voz e envia como nota de voz. Texto
+     curto e falado, sem listas nem símbolos: é para ouvir, não para ler.
 3. Se uma pendência não puder ser concluída, responda **no mesmo chat dela** dizendo
    o que faltou e marque como tratada mesmo assim. Nunca marque como tratada sem ter
    enviado uma resposta naquele chat: para Max, tratada sem resposta é silêncio.

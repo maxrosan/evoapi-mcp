@@ -18,6 +18,7 @@ if str(src_dir) not in sys.path:
 from mcp.server.fastmcp import FastMCP, Image
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
+from evoapi_mcp.speech import SpeechError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.storage import sweep, usage
@@ -188,6 +189,30 @@ def send_file(
     out = _enviado(result)
     if isinstance(result, dict) and result.get("_file"):
         out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
+def send_voice(number: str, text: str, voice: str | None = None) -> str:
+    """Fala um texto e envia como nota de voz (aquela com forma de onda), não como arquivo.
+
+    Use quando pedirem resposta "em áudio" ou "por voz". O texto deve ser falado:
+    frases curtas, sem listas, sem símbolos, sem markdown. Até 3000 caracteres.
+    Sem chave configurada usa as vozes brasileiras do Edge (edge-tts); com
+    EVOLUTION_TTS_API_KEY usa uma API compatível com a OpenAI.
+
+    Args:
+        number: internacional sem '+', ou o jid da conversa
+        text: o que dizer
+        voice: opcional; ex: pt-BR-FranciscaNeural, pt-BR-AntonioNeural (padrão: configurada)
+    """
+    try:
+        result = client.send_voice(number=number, text=text, voice=voice)
+    except SpeechError as e:
+        return _out({"error": str(e), "speech": client.speaker.describe()})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_voice"):
+        out["voice"] = result["_voice"]
     return _out(out)
 
 
@@ -694,6 +719,7 @@ def get_instance_info(full: bool = False) -> str:
     if not full:
         info.pop("info", None)
     info["transcription"] = client.transcriber.describe()
+    info["speech"] = client.speaker.describe()
     info["drive"] = client.drive.describe()
     info["media"] = usage(client.media_dir) | {"ttl_days": config.media_ttl_days}
     from evoapi_mcp.webhook import EVENTS
