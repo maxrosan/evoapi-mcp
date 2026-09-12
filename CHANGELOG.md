@@ -84,7 +84,7 @@ custando o arquivo inteiro dentro da conversa. Duas rotas novas fecham isso.
 - **Tools de base64 escondidas por padrão** (`send_image_base64`, `send_document_base64`,
   `get_media_base64`): tool visível é tool escolhida, e essas são justamente o caminho
   caro que o resto do projeto existe para evitar. `EVOLUTION_BASE64_TOOLS=1` traz de volta.
-  A superfície cai de 28 para 25 tools
+  A superfície cai de 28 para 26 tools (25 sem o `react_to_message`, que entrou junto)
 - **`react_to_message(number, message_id, emoji, from_me?)`**: responder com um sinal em
   vez de mais uma mensagem. String vazia remove a reação
 - **Sinal de vida do bot "IA:"**: ao ser acionado ele reage com 👀 e liga o "digitando…";
