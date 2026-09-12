@@ -15,10 +15,11 @@ src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.drive import DriveError
+from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
     compact_chat,
@@ -372,6 +373,46 @@ def archive_to_drive(
         return _out(client.archive_file(file_path=file_path, folder=folder, filename=filename))
     except DriveError as e:
         return _out({"error": str(e), "drive": client.drive.describe()})
+
+
+@mcp.tool()
+def view_media(
+    message_id: str,
+    page: int = 1,
+    pages: int = 1,
+    password: str | None = None,
+) -> list:
+    """Mostra o documento como imagem, para você LER o que está escrito nele.
+
+    Use quando download_media disser que não há texto extraível: comprovante
+    fotografado, PDF escaneado, print de tela. A página vira imagem e você lê com
+    a própria visão, sem OCR. Custa cerca de 1.500 tokens por página, contra
+    dezenas de milhares do base64.
+
+    Para documento que já tem texto, prefira download_media com extract_text:
+    é muito mais barato.
+
+    Args:
+        message_id: id da mensagem com o anexo
+        page: primeira página a mostrar (PDF), começando em 1
+        pages: quantas páginas, no máximo 5
+        password: senha, se o PDF for protegido
+    """
+    try:
+        resultado = client.render_media(
+            message_id=message_id, first_page=page, pages=pages, password=password
+        )
+    except RenderError as e:
+        return [_out({"error": str(e)})]
+
+    resumo = _out({
+        "file": resultado.get("file"),
+        "mime": resultado.get("mime"),
+        "size": resultado.get("size"),
+        "pages_rendered": resultado.get("pages_rendered"),
+        "first_page": page,
+    })
+    return [resumo] + [Image(data=img, format="jpeg") for img in resultado["images"]]
 
 
 @mcp.tool()

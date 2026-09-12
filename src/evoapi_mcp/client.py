@@ -25,6 +25,7 @@ from evoapi_mcp.formatters import (
     truncate,
 )
 from evoapi_mcp.drive import DriveClient, DriveError
+from evoapi_mcp.rendering import RenderError, is_renderable, render
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
 
 PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
@@ -1050,6 +1051,48 @@ class EvolutionClient:
         if isinstance(result, dict):
             result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
         return result
+
+    # =========================================================================
+    # DOCUMENTO COMO IMAGEM (para o modelo ler o que está escrito)
+    # =========================================================================
+
+    def render_media(
+        self,
+        message_id: str,
+        first_page: int = 1,
+        pages: int = 1,
+        max_side: int = 1568,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Baixa o anexo e devolve as páginas como imagens JPEG.
+
+        Serve para comprovante fotografado e PDF escaneado, que não têm camada de
+        texto. As imagens voltam em bytes, para o servidor MCP entregá-las pelo
+        protocolo como imagem de verdade.
+
+        Returns:
+            dict: {images, format, pages_rendered, file, mime, size, path}
+        """
+        baixado = self.download_media(message_id, password=password)
+        if not is_renderable(baixado.get("mime"), Path(baixado["path"])):
+            raise RenderError(
+                f"A mensagem {message_id} não é imagem nem PDF (mime: {baixado.get('mime')})."
+            )
+        resultado = render(
+            baixado["path"],
+            mime=baixado.get("mime"),
+            first_page=first_page,
+            pages=pages,
+            max_side=max_side,
+            password=None if baixado.get("decrypted") else password,
+        )
+        resultado.update({
+            "file": baixado["file"],
+            "mime": baixado.get("mime"),
+            "size": baixado.get("size"),
+            "path": baixado["path"],
+        })
+        return resultado
 
     # =========================================================================
     # TRANSCRIÇÃO DE ÁUDIOS
