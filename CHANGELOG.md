@@ -254,6 +254,23 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🖥️ Executor local (`runner/`)
+
+- **Substitui o laço `/loop 30s` no chat.** Um script no Windows (`runner/watch.py`)
+  consulta `pending_triggers` a cada 10 s, sem custo de modelo, e só quando há
+  pendência acorda o Claude Code sem interface (`claude -p`, Sonnet, contexto limpo)
+  para tratar a fila e terminar. Registrado como tarefa do Windows: sobe no logon,
+  reinicia se cair, uma instância só
+- O Claude só enxerga as ferramentas do conector `evoapi`, `Skill` e `Read`; o
+  contexto vem de `runner/CLAUDE.md`, a instrução de cada acionamento de
+  `runner/PROMPT.md`, e a skill de arquivamento fica em `runner/.claude/skills`
+- Sem login no Claude Code o executor não acorda ninguém e diz isso no log; três
+  acionamentos seguidos sem esvaziar a fila recuam cinco minutos, e o vigia do
+  servidor avisa Max
+- Motivação: cada volta do laço no chat era um turno pago mesmo com a fila vazia, e
+  a sessão morria em silêncio. Aqui a vigília é HTTP e a morte do processo é coberta
+  pelo Agendador de Tarefas
+
 ### 🛡️ Vigia da fila
 
 - **O servidor avisa quando o laço morre.** Se uma instrução ficar mais de
