@@ -36,14 +36,14 @@ def build_app(token: str):
     """Monta o ASGI app: MCP streamable HTTP protegido por Bearer token."""
     from mcp.server.transport_security import TransportSecuritySettings
     from evoapi_mcp.server import mcp
-    from evoapi_mcp.webhook import EventLog
+    from evoapi_mcp.webhook import EVENTS
 
     expected = f"Bearer {token}".encode()
 
     # Receptor de eventos da Evolution API. O segredo vai no caminho porque a
     # configuração de webhook da Evolution nem sempre deixa mandar cabeçalho.
     webhook_secret = os.environ.get("EVOLUTION_WEBHOOK_SECRET", "").strip()
-    eventos = EventLog()
+    eventos = EVENTS
 
     # O bot fica DESLIGADO até alguém dizer o contrário. Ligar significa passar a
     # responder a terceiros, e isso não deve acontecer por acidente num deploy.

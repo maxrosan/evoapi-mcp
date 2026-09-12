@@ -147,3 +147,54 @@ def test_log_respeita_limite_de_leitura():
     for i in range(30):
         log.add(evento(f"msg {i}"))
     assert len(log.snapshot(limit=5)["eventos"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# fila de pendências (para a sessão em laço)
+# ---------------------------------------------------------------------------
+
+def test_pendentes_traz_so_acionamentos_nao_tratados():
+    log = EventLog()
+    log.add(evento("IA: um"))
+    log.add(evento("bom dia"))
+    log.add(evento("IA: dois", from_me=False))
+
+    pendentes = log.pending()
+    assert len(pendentes) == 1
+    assert pendentes[0]["preview"] == "IA: um"
+
+
+def test_marcar_tratado_tira_da_fila():
+    log = EventLog()
+    log.add(evento("IA: um"))
+    assert len(log.pending()) == 1
+
+    assert log.mark_handled(["MSG1"]) == 1
+    assert log.pending() == []
+    assert log.mark_handled(["MSG1"]) == 0   # idempotente
+
+
+def test_marcar_ids_invalidos_nao_quebra():
+    log = EventLog()
+    assert log.mark_handled([]) == 0
+    assert log.mark_handled(None) == 0
+    assert log.mark_handled(["", None]) == 0
+
+
+def test_pendentes_respeita_limite():
+    log = EventLog()
+    for i in range(8):
+        ev = evento(f"IA: {i}")
+        ev["data"]["key"]["id"] = f"M{i}"
+        log.add(ev)
+    assert len(log.pending(limit=3)) == 3
+    assert log.snapshot()["pendentes"] == 8
+
+
+def test_pendentes_em_ordem_de_chegada():
+    log = EventLog()
+    for i in range(3):
+        ev = evento(f"IA: {i}")
+        ev["data"]["key"]["id"] = f"M{i}"
+        log.add(ev)
+    assert [p["message_id"] for p in log.pending()] == ["M0", "M1", "M2"]

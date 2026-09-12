@@ -22,6 +22,7 @@ from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
+    clean,
     compact_chat,
     compact_contact,
     compact_send_result,
@@ -457,6 +458,48 @@ def get_instance_info(full: bool = False) -> str:
     info["transcription"] = client.transcriber.describe()
     info["drive"] = client.drive.describe()
     return _out(info)
+
+
+@mcp.tool()
+def pending_triggers(limit: int = 10) -> str:
+    """Mensagens "IA:" que Max mandou e que ainda não foram respondidas.
+
+    Use numa sessão em laço: chame, trate o que vier e confirme com mark_triggers_handled.
+    Cada item traz o id, a conversa, a instrução e quando chegou. Só aparecem mensagens
+    do próprio Max começando com "IA:"; mensagem de terceiro nunca entra aqui.
+
+    Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
+
+    Args:
+        limit: máximo de pendências devolvidas (padrão: 10)
+    """
+    from evoapi_mcp.webhook import EVENTS, instruction_of
+
+    pendentes = []
+    for e in EVENTS.pending(limit=limit):
+        pendentes.append(clean({
+            "id": e.get("message_id"),
+            "chat": e.get("chat"),
+            "tipo_conversa": e.get("chat_type"),
+            "quando": e.get("at"),
+            "instrucao": instruction_of(e.get("preview")),
+        }))
+    return _out({"count": len(pendentes), "pendentes": pendentes})
+
+
+@mcp.tool()
+def mark_triggers_handled(message_ids: list[str]) -> str:
+    """Marca acionamentos como tratados, para não voltarem em pending_triggers.
+
+    Chame depois de responder, mesmo que você tenha decidido não responder: sem isso
+    a mesma instrução reaparece a cada volta do laço.
+
+    Args:
+        message_ids: os ids devolvidos por pending_triggers
+    """
+    from evoapi_mcp.webhook import EVENTS
+
+    return _out({"marcados": EVENTS.mark_handled(message_ids), "restantes": len(EVENTS.pending(limit=999))})
 
 
 @mcp.tool()

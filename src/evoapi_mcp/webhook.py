@@ -88,12 +88,33 @@ def summarize_event(payload: Any) -> dict[str, Any]:
 
 
 class EventLog:
-    """Últimos eventos recebidos, em memória."""
+    """Últimos eventos recebidos, em memória.
+
+    Guarda também quais acionamentos já foram tratados, para que uma sessão em
+    laço possa perguntar "o que sobrou?" sem reprocessar nem varrer conversas.
+    """
 
     def __init__(self, maxlen: int = MAX_EVENTS):
         self._eventos: deque[dict[str, Any]] = deque(maxlen=maxlen)
+        self._tratados: deque[str] = deque(maxlen=maxlen * 2)
         self.total = 0
         self.started = datetime.now()
+
+    def pending(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Acionamentos ainda não tratados, do mais antigo para o mais novo."""
+        return [
+            e for e in self._eventos
+            if e.get("trigger") and e.get("message_id") not in self._tratados
+        ][:limit]
+
+    def mark_handled(self, message_ids: list[str]) -> int:
+        """Marca acionamentos como tratados. Devolve quantos passaram a contar."""
+        novos = 0
+        for mid in message_ids or []:
+            if mid and mid not in self._tratados:
+                self._tratados.append(mid)
+                novos += 1
+        return novos
 
     def add(self, payload: Any) -> dict[str, Any]:
         resumo = summarize_event(payload)
@@ -124,5 +145,11 @@ class EventLog:
             "por_evento": por_evento,
             "minhas_mensagens": sum(1 for e in self._eventos if e.get("from_me")),
             "acionamentos": sum(1 for e in self._eventos if e.get("trigger")),
+            "pendentes": len(self.pending(limit=999)),
             "eventos": eventos[-limit:],
         }
+
+
+# Instância única do processo: o receptor HTTP escreve aqui e as tools do MCP leem.
+# Os dois rodam no mesmo processo (mcp_http serve as duas coisas).
+EVENTS = EventLog()

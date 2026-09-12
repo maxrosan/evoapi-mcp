@@ -124,6 +124,16 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Processamento fora do ciclo da requisição: a Evolution recebe o 200 na hora e a
   resposta sai numa thread, senão ela reenviaria o evento
 
+### 🔁 Fila de pendências (para responder por sessão em laço)
+
+- **`pending_triggers`** e **`mark_triggers_handled`**: uma sessão do Claude rodando em
+  laço pergunta o que chegou e confirma o que tratou, em vez de varrer conversas. Cada
+  pendência vem com id, conversa e a instrução já separada do prefixo
+- Serve a quem prefere não pôr chave da Anthropic no servidor: o cérebro passa a ser a
+  sessão. Em troca, a resposta deixa de ser imediata e depende da máquina ligada, e a
+  trava de raio de alcance vira instrução em vez de estrutura, porque a sessão tem todas
+  as ferramentas, inclusive as de envio
+
 ---
 
 ## [1.1.0] - 2025-10-24
