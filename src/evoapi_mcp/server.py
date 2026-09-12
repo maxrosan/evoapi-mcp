@@ -698,6 +698,9 @@ def get_instance_info(full: bool = False) -> str:
     info["media"] = usage(client.media_dir) | {"ttl_days": config.media_ttl_days}
     from evoapi_mcp.webhook import EVENTS
     info["armazenamento"] = EVENTS.store.describe()
+    info["dono_configurado"] = bool(EVENTS.owner_number)
+    vigia = getattr(EVENTS, "watchdog", None)
+    info["vigia"] = vigia.describe() if vigia else {"ativo": False}
     return _out(info)
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections import deque
 from datetime import datetime
 from typing import Any
@@ -96,6 +97,8 @@ def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, 
         "event": evento,
         "instance": payload.get("instance"),
         "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        # Carimbo numérico para medir idade sem parsear texto (o vigia usa isto).
+        "ts": time.time(),
     }
 
     if not isinstance(dados, dict):

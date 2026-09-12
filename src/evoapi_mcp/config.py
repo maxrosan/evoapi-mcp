@@ -36,6 +36,7 @@ class EvolutionConfig(BaseSettings):
     Conversa pessoal (eu comigo mesmo):
     - EVOLUTION_OWNER_NUMBER: seu número, ex: 5584999290327. Nessa conversa toda
       mensagem sua é instrução, sem precisar do prefixo "IA:"
+    - EVOLUTION_WATCHDOG_MINUTES / _COOLDOWN_MINUTES: vigia da fila (ver mcp_http)
     """
 
     base_url: str = Field(

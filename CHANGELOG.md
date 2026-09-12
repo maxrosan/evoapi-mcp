@@ -254,6 +254,22 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🛡️ Vigia da fila
+
+- **O servidor avisa quando o laço morre.** Se uma instrução ficar mais de
+  `EVOLUTION_WATCHDOG_MINUTES` (padrão 10) na fila sem ser tratada, ele manda uma
+  mensagem na conversa pessoal do dono dizendo quantas estão paradas e desde quando.
+  Repete no máximo a cada `EVOLUTION_WATCHDOG_COOLDOWN_MINUTES` (padrão 60) e rearma
+  sozinho quando a fila volta a andar
+- Motivação: a sessão do laço morreu depois de um redeploy e o servidor passou nove
+  horas enfileirando instruções que ninguém consumia, sem nada na tela acusar. Essa é
+  a única falha que o servidor consegue ver por conta própria, então passa a gritar
+- O aviso é uma mensagem do dono na conversa dele, o que a tornaria instrução: o id é
+  marcado como tratado assim que o envio devolve, e o vigia ignora pendências que
+  comecem com o seu próprio marcador, caso a marcação falhe
+- Eventos ganham carimbo numérico `ts`; `get_instance_info` passa a expor `vigia` e
+  `dono_configurado`. Sem `EVOLUTION_OWNER_NUMBER` o vigia fica desligado e diz por quê
+
 ### 💾 Registro persistente do que já foi tratado
 
 - **`store.py`**: com `EVOLUTION_DB_URL` apontando para um Postgres, o "já respondi isto"

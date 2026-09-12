@@ -14,6 +14,12 @@ Variáveis de ambiente:
     EVOLUTION_BOT_ENABLED     "1" liga o bot "IA:". **Desligado por padrão**: sem isto
                               o receptor apenas observa, sem responder a ninguém.
     ANTHROPIC_API_KEY         necessária quando o bot está ligado.
+    EVOLUTION_WATCHDOG_MINUTES
+                              vigia da fila: se uma instrução ficar mais que isto sem
+                              ser tratada, avisa o dono na conversa pessoal. Padrão 10;
+                              0 desliga. Exige EVOLUTION_OWNER_NUMBER.
+    EVOLUTION_WATCHDOG_COOLDOWN_MINUTES
+                              intervalo mínimo entre avisos (padrão 60).
 
 Uso:
     python -m evoapi_mcp.mcp_http
@@ -59,6 +65,36 @@ def build_app(token: str):
         print(f"Bot 'IA:' LIGADO (modelo {bot.model})", file=sys.stderr)
     else:
         print("Bot 'IA:' desligado; o receptor apenas observa.", file=sys.stderr)
+
+    # Vigia da fila: a única falha que o servidor consegue ver sozinho é "a fila
+    # parou de andar". Quando vê, avisa o dono no WhatsApp em vez de ficar calado.
+    watchdog = None
+    try:
+        minutos = float(os.environ.get("EVOLUTION_WATCHDOG_MINUTES", "10") or 0)
+    except ValueError:
+        minutos = 0.0
+    dono = os.environ.get("EVOLUTION_OWNER_NUMBER", "").strip()
+    if minutos > 0 and dono:
+        from evoapi_mcp.server import client as evolution_client
+        from evoapi_mcp.watchdog import Watchdog
+
+        try:
+            cooldown = float(os.environ.get("EVOLUTION_WATCHDOG_COOLDOWN_MINUTES", "60") or 60)
+        except ValueError:
+            cooldown = 60.0
+        watchdog = Watchdog(
+            events=eventos,
+            send=lambda numero, texto: evolution_client.send_text(number=numero, text=texto, link_preview=False),
+            owner_number=dono,
+            max_age_s=minutos * 60,
+            cooldown_s=cooldown * 60,
+        )
+        watchdog.start()
+    elif minutos > 0:
+        print("Vigia desligado: EVOLUTION_OWNER_NUMBER não definido (não sei para quem avisar).", file=sys.stderr)
+    else:
+        print("Vigia desligado (EVOLUTION_WATCHDOG_MINUTES=0).", file=sys.stderr)
+    eventos.watchdog = watchdog
 
     def processar(payload, resumo):
         """Roda fora do ciclo da requisição: a Evolution só quer o 200 rápido."""
