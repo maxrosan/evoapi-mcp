@@ -12,6 +12,7 @@ reinicia e não vai para disco.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections import deque
 from datetime import datetime
@@ -24,6 +25,12 @@ from evoapi_mcp.store import build_store
 TRIGGER_PREFIX = "ia:"
 PREVIEW_CHARS = 80
 MAX_EVENTS = 200
+# A instrução é guardada inteira, e não cortada como a prévia: é o texto que o
+# assistente precisa executar. São palavras do próprio dono, nunca de terceiro.
+MAX_INSTRUCTION = 2000
+# Últimos dígitos comparados para reconhecer o próprio número. Oito porque o WhatsApp
+# escreve o mesmo telefone ora com o nono dígito, ora sem.
+TAIL_DIGITS = 8
 
 
 def _log(message: str) -> None:
@@ -39,18 +46,46 @@ def is_trigger(text: str | None) -> bool:
     return bool(text) and text.lstrip().casefold().startswith(TRIGGER_PREFIX)
 
 
-def instruction_of(text: str | None) -> str | None:
-    """Devolve o que vem depois de 'IA:', ou None se não for um acionamento."""
+def instruction_of(text: str | None, self_chat: bool = False) -> str | None:
+    """A instrução contida na mensagem, ou None se não houver.
+
+    Na conversa do dono com ele mesmo, a mensagem inteira é a instrução: ali não se
+    escreve prefixo, tudo o que ele manda é pedido. Nas outras conversas, só conta o
+    que vem depois de "IA:".
+    """
+    if self_chat:
+        return (text or "").strip()[:MAX_INSTRUCTION] or None
     if not is_trigger(text):
         return None
-    return text.lstrip()[len(TRIGGER_PREFIX):].strip() or None
+    return text.lstrip()[len(TRIGGER_PREFIX):].strip()[:MAX_INSTRUCTION] or None
 
 
-def summarize_event(payload: Any) -> dict[str, Any]:
-    """Reduz um evento da Evolution ao que interessa para esta investigação.
+def _tail(value: str | None) -> str:
+    """Os últimos dígitos de um número ou jid, para comparação tolerante."""
+    digitos = "".join(c for c in (value or "") if c.isdigit())
+    return digitos[-TAIL_DIGITS:] if len(digitos) >= TAIL_DIGITS else ""
 
-    Campos: event, instance, at, from_me, chat, chat_type, type, preview,
-    trigger, message_id.
+
+def is_self_chat(remote_jid: str | None, alt_jid: str | None, owner_number: str | None) -> bool:
+    """True quando a conversa é a do dono com ele mesmo.
+
+    O jid dela costuma ser opaco (`...@lid`), então o telefone aparece em
+    `remoteJidAlt`. Compara pelos últimos dígitos porque o mesmo número aparece
+    ora com o nono dígito, ora sem.
+    """
+    dono = _tail(owner_number)
+    if not dono:
+        return False
+    if remote_jid and str(remote_jid).endswith("@g.us"):
+        return False
+    return dono in (_tail(remote_jid), _tail(alt_jid))
+
+
+def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, Any]:
+    """Reduz um evento da Evolution ao que interessa.
+
+    Campos: event, instance, at, from_me, chat, chat_type, self_chat, type,
+    preview, instruction, trigger, message_id.
     """
     if not isinstance(payload, dict):
         return {"event": "?", "erro": "corpo não é um objeto JSON"}
@@ -71,18 +106,25 @@ def summarize_event(payload: Any) -> dict[str, Any]:
     compacta = compact_message(dados, max_text=None) if dados.get("message") or key else {}
     texto = compacta.get("text")
     minha = bool(key.get("fromMe")) if key else None
+    propria = is_self_chat(jid, key.get("remoteJidAlt"), owner_number)
 
-    # Acionamento exige as duas coisas: ser minha E começar com o prefixo. Um
-    # terceiro escrevendo "IA:" num grupo não pode comandar nada.
-    aciona = bool(minha) and is_trigger(texto)
+    # Duas portas, e as duas exigem que a mensagem seja do dono:
+    #  - na conversa dele com ele mesmo, tudo o que ele escreve é instrução;
+    #  - nas demais, só o que começa com "IA:".
+    # Um terceiro escrevendo "IA:" num grupo continua não comandando nada.
+    instrucao = instruction_of(texto, self_chat=propria) if minha else None
+    aciona = bool(minha) and bool(instrucao) and (propria or is_trigger(texto))
 
     resumo.update({
         "message_id": key.get("id"),
         "from_me": minha,
         "chat": jid_to_number(jid) if jid else None,
+        "chat_jid": jid,
         "chat_type": ("grupo" if str(jid).endswith("@g.us") else "direto") if jid else None,
+        "self_chat": True if propria else None,
         "type": compacta.get("type") or dados.get("messageType"),
         "preview": (texto[:PREVIEW_CHARS] + "…") if texto and len(texto) > PREVIEW_CHARS else texto,
+        "instruction": instrucao if aciona else None,
         "trigger": True if aciona else None,
     })
     return clean(resumo)
@@ -95,9 +137,10 @@ class EventLog:
     laço possa perguntar "o que sobrou?" sem reprocessar nem varrer conversas.
     """
 
-    def __init__(self, maxlen: int = MAX_EVENTS, store: Any = None):
+    def __init__(self, maxlen: int = MAX_EVENTS, store: Any = None, owner_number: str | None = None):
         self._eventos: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self.store = store if store is not None else build_store()
+        self.owner_number = owner_number if owner_number is not None else os.environ.get("EVOLUTION_OWNER_NUMBER", "")
         self.total = 0
         self.started = datetime.now()
 
@@ -130,10 +173,12 @@ class EventLog:
         return novos
 
     def add(self, payload: Any) -> dict[str, Any]:
-        resumo = summarize_event(payload)
+        resumo = summarize_event(payload, owner_number=self.owner_number)
         self._eventos.append(resumo)
         self.total += 1
         marca = " <<< ACIONAMENTO" if resumo.get("trigger") else ""
+        if resumo.get("self_chat"):
+            marca += " (conversa pessoal)"
         _log(
             f"{resumo.get('event')} from_me={resumo.get('from_me')} "
             f"tipo={resumo.get('type')} chat={resumo.get('chat_type')}{marca}"
@@ -160,6 +205,7 @@ class EventLog:
             "acionamentos": sum(1 for e in self._eventos if e.get("trigger")),
             "pendentes": len(self.pending(limit=999)),
             "armazenamento": self.store.describe(),
+            "dono_configurado": bool(self.owner_number),
             "eventos": eventos[-limit:],
         }
 

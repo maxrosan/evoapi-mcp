@@ -30,6 +30,10 @@ class EvolutionConfig(BaseSettings):
     Arquivamento no Google Drive (opcional):
     - EVOLUTION_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN: credenciais OAuth
     - EVOLUTION_DRIVE_ROOT / _ROOT_ID: pasta base do arquivamento
+
+    Conversa pessoal (eu comigo mesmo):
+    - EVOLUTION_OWNER_NUMBER: seu número, ex: 5584999290327. Nessa conversa toda
+      mensagem sua é instrução, sem precisar do prefixo "IA:"
     """
 
     base_url: str = Field(
@@ -126,6 +130,10 @@ class EvolutionConfig(BaseSettings):
     drive_refresh_token: str = Field(default="", description="Refresh token OAuth do Google")
     drive_root: str = Field(default="", description="Pasta base no Drive, ex: FINANCEIRO")
     drive_root_id: str = Field(default="", description="Id da pasta base (criada pelo próprio app)")
+    owner_number: str = Field(
+        default="",
+        description="Número do dono da instância; identifica a conversa dele com ele mesmo"
+    )
 
     @field_validator("transcribe_backend")
     @classmethod

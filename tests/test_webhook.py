@@ -8,6 +8,7 @@ from evoapi_mcp.webhook import (
     PREVIEW_CHARS,
     EventLog,
     instruction_of,
+    is_self_chat,
     is_trigger,
     summarize_event,
 )
@@ -198,3 +199,95 @@ def test_pendentes_em_ordem_de_chegada():
         ev["data"]["key"]["id"] = f"M{i}"
         log.add(ev)
     assert [p["message_id"] for p in log.pending()] == ["M0", "M1", "M2"]
+
+
+# ---------------------------------------------------------------------------
+# conversa pessoal: lá tudo é instrução, sem prefixo
+# ---------------------------------------------------------------------------
+
+DONO = "5584999290327"
+MINHA_CONVERSA = "110818863673433@lid"
+
+
+def evento_pessoal(texto, from_me=True, msg_id="P1"):
+    return {
+        "event": "messages.upsert",
+        "data": {
+            "key": {"id": msg_id, "fromMe": from_me, "remoteJid": MINHA_CONVERSA,
+                    "remoteJidAlt": "558499290327@s.whatsapp.net"},
+            "messageType": "conversation",
+            "message": {"conversation": texto},
+            "messageTimestamp": TS,
+        },
+    }
+
+
+def test_reconhece_a_conversa_pessoal_pelo_numero_alternativo():
+    """O jid é opaco; o telefone só aparece em remoteJidAlt."""
+    assert is_self_chat(MINHA_CONVERSA, "558499290327@s.whatsapp.net", DONO)
+    assert is_self_chat(f"{DONO}@s.whatsapp.net", None, DONO)
+    assert not is_self_chat("5511888887777@s.whatsapp.net", None, DONO)
+    assert not is_self_chat("120363@g.us", "558499290327@s.whatsapp.net", DONO)  # grupo nunca
+
+
+def test_tolera_o_nono_digito():
+    """O mesmo telefone aparece ora com o nono dígito, ora sem."""
+    assert is_self_chat("558499290327@s.whatsapp.net", None, "5584999290327")
+    assert is_self_chat("5584999290327@s.whatsapp.net", None, "558499290327")
+
+
+def test_sem_dono_configurado_nada_e_conversa_pessoal():
+    assert not is_self_chat(MINHA_CONVERSA, "558499290327@s.whatsapp.net", None)
+    assert not is_self_chat(MINHA_CONVERSA, "558499290327@s.whatsapp.net", "")
+
+
+def test_mensagem_sem_prefixo_na_conversa_pessoal_aciona():
+    r = summarize_event(evento_pessoal("Coloque no Trello o boleto de amanhã"), owner_number=DONO)
+    assert r["self_chat"] is True
+    assert r["trigger"] is True
+    assert r["instruction"] == "Coloque no Trello o boleto de amanhã"
+
+
+def test_prefixo_na_conversa_pessoal_tambem_funciona():
+    r = summarize_event(evento_pessoal("IA: qual a tabela?"), owner_number=DONO)
+    # ali o prefixo não é necessário, então ele faz parte da instrução
+    assert r["trigger"] is True
+    assert r["instruction"] == "IA: qual a tabela?"
+
+
+def test_terceiro_na_conversa_pessoal_nao_aciona():
+    """Improvável, mas a regra é a mesma: só o dono comanda."""
+    r = summarize_event(evento_pessoal("faça isso", from_me=False), owner_number=DONO)
+    assert "trigger" not in r
+
+
+def test_mensagem_vazia_na_conversa_pessoal_nao_aciona():
+    r = summarize_event(evento_pessoal("   "), owner_number=DONO)
+    assert "trigger" not in r
+
+
+def test_instrucao_longa_nao_e_cortada_como_a_previa():
+    """A prévia é curta por privacidade; a instrução precisa vir inteira."""
+    longa = "Arquive " + "x" * 300
+    r = summarize_event(evento_pessoal(longa), owner_number=DONO)
+    assert len(r["preview"]) == PREVIEW_CHARS + 1
+    assert r["instruction"] == longa
+
+
+def test_sem_dono_a_conversa_pessoal_volta_a_exigir_prefixo():
+    r = summarize_event(evento_pessoal("Coloque no Trello"), owner_number=None)
+    assert "trigger" not in r
+
+
+def test_resposta_do_assistente_nao_vira_nova_instrucao():
+    """Na conversa pessoal a resposta do assistente também é `fromMe`: sem marcar,
+    ela voltaria como pedido e o laço não pararia mais."""
+    from evoapi_mcp.store import MemoryStore
+
+    store = MemoryStore()
+    log = EventLog(store=store, owner_number=DONO)
+
+    store.mark("RESP1", instruction="[enviada pelo assistente]")   # o que _enviado() faz
+    log.add(evento_pessoal("Pronto, criei o cartão no Trello", msg_id="RESP1"))
+
+    assert log.pending() == []

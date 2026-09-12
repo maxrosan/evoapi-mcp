@@ -26,8 +26,8 @@ def evento(texto, from_me=True, jid="5511888887777@s.whatsapp.net", msg_id="MSG1
 
 
 def par(ev):
-    """(resumo, bruto) como o receptor entrega ao bot."""
-    return summarize_event(ev), ev["data"]
+    """(resumo, bruto) como o receptor entrega ao bot, já sabendo quem é o dono."""
+    return summarize_event(ev, owner_number=MEU_NUMERO), ev["data"]
 
 
 class FakeBloco:
@@ -111,10 +111,9 @@ def test_minha_mensagem_com_prefixo_aciona(bot):
 
 
 def test_acionamento_vazio_nao_aciona(bot):
+    """"IA:" sozinho não é pedido nenhum."""
     resumo, bruto = par(evento("IA:"))
-    pode, motivo = bot.should_handle(resumo, bruto)
-    assert not pode
-    assert "sem instrução" in motivo
+    assert bot.should_handle(resumo, bruto)[0] is False
 
 
 # ---------------------------------------------------------------------------
@@ -137,24 +136,27 @@ def test_ignora_a_propria_resposta(bot, client):
 
 
 # ---------------------------------------------------------------------------
-# conversa pessoal
+# conversa pessoal: ali tudo é instrução, sem prefixo
 # ---------------------------------------------------------------------------
 
-def test_conversa_pessoal_fica_de_fora(bot):
-    resumo, bruto = par(evento("IA: oi", jid=f"{MEU_NUMERO}@s.whatsapp.net"))
-    pode, motivo = bot.should_handle(resumo, bruto)
-    assert not pode
-    assert "pessoal" in motivo
-
-
-def test_conversa_pessoal_por_lid(bot):
-    resumo, bruto = par(evento("IA: oi", jid="99887766@lid", alt=f"{MEU_NUMERO}@s.whatsapp.net"))
-    assert bot.should_handle(resumo, bruto)[1] == "conversa pessoal, fora do escopo"
-
-
-def test_grupo_nao_e_conversa_pessoal(bot):
-    resumo, bruto = par(evento("IA: oi", jid="120363@g.us"))
+def test_conversa_pessoal_dispensa_prefixo(bot):
+    """É como Max já usava antes desta funcionalidade: escreve e o assistente faz."""
+    resumo, bruto = par(evento("Coloque no Trello o boleto de amanhã",
+                               jid="110818863673433@lid", alt=f"{MEU_NUMERO}@s.whatsapp.net"))
+    assert resumo.get("self_chat") is True
+    assert resumo["instruction"] == "Coloque no Trello o boleto de amanhã"
     assert bot.should_handle(resumo, bruto)[0] is True
+
+
+def test_fora_da_conversa_pessoal_o_prefixo_e_obrigatorio(bot):
+    resumo, bruto = par(evento("Coloque no Trello", jid="5511888887777@s.whatsapp.net"))
+    assert "trigger" not in resumo
+    assert bot.should_handle(resumo, bruto)[0] is False
+
+
+def test_grupo_continua_exigindo_prefixo(bot):
+    assert par(evento("bom dia pessoal", jid="120363@g.us"))[0].get("trigger") is None
+    assert par(evento("IA: resuma", jid="120363@g.us"))[0]["trigger"] is True
 
 
 # ---------------------------------------------------------------------------

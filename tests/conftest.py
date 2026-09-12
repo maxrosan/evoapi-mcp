@@ -21,6 +21,7 @@ def config(tmp_path):
         instance_name="inst",
         media_dir=str(tmp_path / "media"),
         transcribe_backend="off",  # determinístico: testes injetam o backend
+        owner_number="5584999290327",
         _env_file=None,
     )
 
@@ -52,7 +53,7 @@ def registro_limpo():
     from evoapi_mcp.store import MemoryStore
 
     anterior = webhook.EVENTS
-    webhook.EVENTS = webhook.EventLog(store=MemoryStore())
+    webhook.EVENTS = webhook.EventLog(store=MemoryStore(), owner_number="5584999290327")
     yield webhook.EVENTS
     webhook.EVENTS = anterior
 
@@ -63,4 +64,4 @@ def eventos():
     from evoapi_mcp.webhook import EventLog
     from evoapi_mcp.store import MemoryStore
 
-    return EventLog(store=MemoryStore())
+    return EventLog(store=MemoryStore(), owner_number="5584999290327")

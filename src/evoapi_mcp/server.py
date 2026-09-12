@@ -46,6 +46,23 @@ def _out(obj: Any) -> str:
     return dumps(obj)
 
 
+def _enviado(resultado: Any) -> dict:
+    """Compacta a resposta de um envio e registra a mensagem como já tratada.
+
+    O registro importa por causa da conversa pessoal: lá toda mensagem do dono é
+    instrução, e a instância não distingue o que ele digitou do que o assistente
+    mandou. Sem marcar, a própria resposta voltaria como pedido e entraria em laço.
+    """
+    try:
+        message_id = ((resultado or {}).get("key") or {}).get("id")
+        if message_id:
+            from evoapi_mcp.webhook import EVENTS
+            EVENTS.store.mark(message_id, instruction="[enviada pelo assistente]")
+    except Exception:  # nunca deixar o registro atrapalhar um envio bem-sucedido
+        pass
+    return compact_send_result(resultado)
+
+
 def _limit(value: int | None) -> int:
     return value if value and value > 0 else config.default_limit
 
@@ -70,13 +87,13 @@ def send_text_message(number: str, text: str, link_preview: bool = True) -> str:
         link_preview: mostrar preview de links
     Returns: {ok, id, to, ts, status}
     """
-    return _out(compact_send_result(client.send_text(number=number, text=text, link_preview=link_preview)))
+    return _out(_enviado(client.send_text(number=number, text=text, link_preview=link_preview)))
 
 
 @mcp.tool()
 def send_image(number: str, image_url: str, caption: str | None = None) -> str:
     """Envia imagem a partir de URL pública. Para arquivo local use send_file."""
-    return _out(compact_send_result(
+    return _out(_enviado(
         client.send_media(number=number, media_url=image_url, media_type="image", caption=caption)
     ))
 
@@ -89,7 +106,7 @@ def send_document(
     caption: str | None = None,
 ) -> str:
     """Envia documento (pdf, docx, xlsx...) a partir de URL pública. Para arquivo local use send_file."""
-    return _out(compact_send_result(client.send_media(
+    return _out(_enviado(client.send_media(
         number=number, media_url=document_url, media_type="document", caption=caption, filename=filename
     )))
 
@@ -97,7 +114,7 @@ def send_document(
 @mcp.tool()
 def send_video(number: str, video_url: str, caption: str | None = None) -> str:
     """Envia vídeo a partir de URL pública. Para arquivo local use send_file."""
-    return _out(compact_send_result(
+    return _out(_enviado(
         client.send_media(number=number, media_url=video_url, media_type="video", caption=caption)
     ))
 
@@ -105,7 +122,7 @@ def send_video(number: str, video_url: str, caption: str | None = None) -> str:
 @mcp.tool()
 def send_audio(number: str, audio_url: str) -> str:
     """Envia áudio a partir de URL pública. Para arquivo local use send_file."""
-    return _out(compact_send_result(client.send_media(number=number, media_url=audio_url, media_type="audio")))
+    return _out(_enviado(client.send_media(number=number, media_url=audio_url, media_type="audio")))
 
 
 @mcp.tool()
@@ -130,7 +147,7 @@ def send_file(
     result = client.send_file(
         number=number, file_path=file_path, caption=caption, media_type=media_type, file_name=file_name
     )
-    out = compact_send_result(result)
+    out = _enviado(result)
     if isinstance(result, dict) and result.get("_file"):
         out["file"] = result["_file"]
     return _out(out)
@@ -145,7 +162,7 @@ def send_document_base64(
     mimetype: str = "application/pdf",
 ) -> str:
     """Envia documento a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
-    return _out(compact_send_result(client.send_media_base64(
+    return _out(_enviado(client.send_media_base64(
         number=number, base64_data=base64_data, media_type="document",
         file_name=file_name, caption=caption or None, mimetype=mimetype,
     )))
@@ -160,7 +177,7 @@ def send_image_base64(
     mimetype: str = "image/png",
 ) -> str:
     """Envia imagem a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
-    return _out(compact_send_result(client.send_media_base64(
+    return _out(_enviado(client.send_media_base64(
         number=number, base64_data=base64_data, media_type="image",
         file_name=file_name, caption=caption or None, mimetype=mimetype,
     )))
@@ -467,24 +484,29 @@ def pending_triggers(limit: int = 10) -> str:
     """Mensagens "IA:" que Max mandou e que ainda não foram respondidas.
 
     Use numa sessão em laço: chame, trate o que vier e confirme com mark_triggers_handled.
-    Cada item traz o id, a conversa, a instrução e quando chegou. Só aparecem mensagens
-    do próprio Max começando com "IA:"; mensagem de terceiro nunca entra aqui.
+    Cada item traz o id, a conversa, a instrução e quando chegou.
+
+    Duas portas, as duas só para mensagens do próprio Max:
+    - na conversa dele com ele mesmo (tipo_conversa "pessoal"), TODA mensagem é
+      instrução, sem prefixo;
+    - nas demais conversas e grupos, só o que começa com "IA:".
+    Mensagem de terceiro nunca entra aqui.
 
     Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
 
     Args:
         limit: máximo de pendências devolvidas (padrão: 10)
     """
-    from evoapi_mcp.webhook import EVENTS, instruction_of
+    from evoapi_mcp.webhook import EVENTS
 
     pendentes = []
     for e in EVENTS.pending(limit=limit):
         pendentes.append(clean({
             "id": e.get("message_id"),
-            "chat": e.get("chat"),
-            "tipo_conversa": e.get("chat_type"),
+            "chat": e.get("chat_jid") or e.get("chat"),
+            "tipo_conversa": "pessoal" if e.get("self_chat") else e.get("chat_type"),
             "quando": e.get("at"),
-            "instrucao": instruction_of(e.get("preview")),
+            "instrucao": e.get("instruction"),
         }))
     return _out({"count": len(pendentes), "pendentes": pendentes})
 

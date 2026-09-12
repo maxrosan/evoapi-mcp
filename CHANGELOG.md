@@ -134,6 +134,24 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
   trava de raio de alcance vira instrução em vez de estrutura, porque a sessão tem todas
   as ferramentas, inclusive as de envio
 
+### 🙋 Conversa pessoal: ali tudo é instrução
+
+- **Na conversa do dono com ele mesmo, toda mensagem dele é instrução, sem prefixo.**
+  É como ele já usava antes desta funcionalidade existir, e a regra do "IA:" tinha
+  quebrado isso sem que ninguém percebesse. Nas demais conversas e grupos, o prefixo
+  continua obrigatório
+- `EVOLUTION_OWNER_NUMBER` identifica essa conversa. O jid dela é opaco (`...@lid`), então
+  o telefone é comparado também contra `remoteJidAlt`, pelos últimos 8 dígitos, porque o
+  WhatsApp escreve o mesmo número ora com o nono dígito, ora sem. Sem a variável, nada é
+  tratado como conversa pessoal e a regra antiga vale em tudo
+- A instrução passa a ser guardada inteira, separada da prévia, que segue curta por
+  privacidade. Antes uma instrução longa chegava cortada em 80 caracteres
+- **Todo envio nosso é marcado como já tratado.** Na conversa pessoal a instância não
+  distingue o que o dono digitou do que o assistente respondeu; sem isso a própria
+  resposta voltaria como pedido e o laço não pararia
+- Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
+  apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
+
 ### 💾 Registro persistente do que já foi tratado
 
 - **`store.py`**: com `EVOLUTION_DB_URL` apontando para um Postgres, o "já respondi isto"

@@ -10,7 +10,8 @@ Desenho, e o porquê de cada trava:
   que existe.
 - **Nada de laço.** A resposta do bot também chega marcada como `fromMe`. Os ids
   enviados são guardados e ignorados, assim como qualquer id já processado.
-- **Conversa pessoal fica de fora.** É onde Max despeja documentos; o bot não opina lá.
+- **Conversa pessoal é o canal principal.** Lá toda mensagem dele é instrução, sem
+  prefixo, e é assim que ele já usava antes desta funcionalidade existir.
 - **Teto de gasto diário.** Ao estourar, avisa uma vez e para.
 
 As mensagens das outras pessoas entram como dado, nunca como instrução: o prompt de
@@ -27,7 +28,6 @@ from typing import Any
 
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.formatters import dumps
-from evoapi_mcp.webhook import instruction_of
 
 # Padrão do skill de API: Opus 5, salvo escolha explícita em EVOLUTION_BOT_MODEL.
 DEFAULT_MODEL = "claude-opus-5"
@@ -107,7 +107,7 @@ class Bot:
         anthropic_client: Any = None,
         model: str | None = None,
         budget: DailyBudget | None = None,
-        skip_self_chat: bool = True,
+        skip_self_chat: bool = False,
         events: Any = None,
     ):
         self.client = client
@@ -126,7 +126,9 @@ class Bot:
         self._anthropic = anthropic_client
         self._seen: deque[str] = deque(maxlen=MAX_SEEN)
         self._sent: deque[str] = deque(maxlen=MAX_SEEN)
-        self._own_number = self._digits(client.config.instance_name)
+        # `instance_name` é um apelido ("Max 1"), não um telefone: o número vem da
+        # configuração própria. Antes daqui isto estava errado e nunca reconhecia nada.
+        self._own_number = self._digits(getattr(client.config, "owner_number", ""))
 
     # ------------------------------------------------------------------ apoio
 
@@ -179,7 +181,9 @@ class Bot:
         if self.skip_self_chat and self.is_self_chat(chat, raw):
             return False, "conversa pessoal, fora do escopo"
 
-        if not instruction_of(resumo.get("preview")):
+        # A instrução já vem pronta do resumo: na conversa pessoal é a mensagem
+        # inteira, nas demais é o que vem depois de "IA:".
+        if not resumo.get("instruction"):
             return False, "acionamento sem instrução"
 
         if self.budget.exhausted:
@@ -198,7 +202,7 @@ class Bot:
         message_id = resumo["message_id"]
         self._seen.append(message_id)
         chat = (raw or {}).get("key", {}).get("remoteJid") or resumo.get("chat")
-        instrucao = instruction_of(resumo.get("preview")) or ""
+        instrucao = resumo.get("instruction") or ""
         # Marca ANTES de responder: se algo estourar no meio, o pior caso é uma
         # instrução não respondida, e não a mesma resposta saindo duas vezes.
         self.events.mark_handled([message_id], chat=chat, instruction=instrucao)
