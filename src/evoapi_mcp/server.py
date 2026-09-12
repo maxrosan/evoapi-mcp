@@ -18,6 +18,7 @@ if str(src_dir) not in sys.path:
 from mcp.server.fastmcp import FastMCP
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
+from evoapi_mcp.drive import DriveError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
     compact_chat,
@@ -336,6 +337,37 @@ def transcribe_audio(
 
 
 @mcp.tool()
+def archive_to_drive(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    folder: str = "",
+    filename: str | None = None,
+) -> str:
+    """Arquiva um anexo do WhatsApp no Google Drive sem trazer o arquivo para a conversa.
+
+    O arquivo vai do WhatsApp para o servidor e do servidor para o Drive. Use no lugar
+    de get_media_base64 + upload: funciona com arquivos grandes e custa alguns tokens
+    em vez de milhares. As pastas que faltarem no caminho são criadas.
+
+    Args:
+        message_id: id da mensagem com o anexo (informe este OU file_path)
+        file_path: caminho de um arquivo que já está no servidor
+        folder: caminho da pasta, relativo à pasta base configurada
+                (ex: "MR/2026/08.2026/BOLETO")
+        filename: nome final do arquivo (padrão: o nome original)
+    Returns: {id, name, folder, size, link}
+    """
+    if bool(message_id) == bool(file_path):
+        raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
+    try:
+        if message_id:
+            return _out(client.archive_media(message_id=message_id, folder=folder, filename=filename))
+        return _out(client.archive_file(file_path=file_path, folder=folder, filename=filename))
+    except DriveError as e:
+        return _out({"error": str(e), "drive": client.drive.describe()})
+
+
+@mcp.tool()
 def get_media_base64(message_id: str) -> str:
     """Devolve o anexo em base64. EVITE: custa dezenas de milhares de tokens; use download_media."""
     data = client.get_media(message_id)
@@ -375,6 +407,7 @@ def get_instance_info(full: bool = False) -> str:
     if not full:
         info.pop("info", None)
     info["transcription"] = client.transcriber.describe()
+    info["drive"] = client.drive.describe()
     return _out(info)
 
 

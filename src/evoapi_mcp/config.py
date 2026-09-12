@@ -26,6 +26,10 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_TRANSCRIBE_LANGUAGE: idioma dos áudios, ex: pt (padrão: detectar)
     - EVOLUTION_TRANSCRIBE_TIMEOUT: timeout da transcrição em segundos (padrão: 120)
     - EVOLUTION_TRANSCRIBE_MAX_MB: tamanho máximo aceito pela API (padrão: 25)
+
+    Arquivamento no Google Drive (opcional):
+    - EVOLUTION_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN: credenciais OAuth
+    - EVOLUTION_DRIVE_ROOT / _ROOT_ID: pasta base do arquivamento
     """
 
     base_url: str = Field(
@@ -116,6 +120,12 @@ class EvolutionConfig(BaseSettings):
         from pathlib import Path
         import os
         return str(Path(os.path.expandvars(v)).expanduser())
+
+    drive_client_id: str = Field(default="", description="Client ID OAuth do Google")
+    drive_client_secret: str = Field(default="", description="Client secret OAuth do Google")
+    drive_refresh_token: str = Field(default="", description="Refresh token OAuth do Google")
+    drive_root: str = Field(default="", description="Pasta base no Drive, ex: FINANCEIRO")
+    drive_root_id: str = Field(default="", description="Id da pasta base (criada pelo próprio app)")
 
     @field_validator("transcribe_backend")
     @classmethod

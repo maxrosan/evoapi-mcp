@@ -39,6 +39,16 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - **`mcp_http.py`** (`evoapi-mcp-http`): MCP via Streamable HTTP com Bearer token
   (`MCP_AUTH_TOKEN`, `PORT`), substituindo o wrapper externo usado no Easypanel
 - Console scripts `evoapi-mcp` (stdio) e `evoapi-mcp-http`
+- **Arquivamento no Google Drive pelo servidor**: tool `archive_to_drive` leva o anexo
+  do WhatsApp ao Drive sem passar o arquivo pela conversa, criando as pastas que
+  faltarem. O conector de Drive do Claude só aceita conteúdo embutido, então arquivar
+  um boleto custava dezenas de milhares de tokens e um PDF grande simplesmente não
+  cabia. Escopo `drive.file` de propósito: `drive` é restrito e obrigaria verificação
+  do Google, e em modo de testes o refresh token expiraria a cada 7 dias
+- `scripts/google_oauth_setup.py` obtém o refresh token e grava em arquivo local,
+  sem imprimir o segredo na tela
+- Configuração: `EVOLUTION_DRIVE_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`,
+  `_ROOT_ID`, `_ROOT`
 - **Transcrição de áudios**: tool `transcribe_audio(message_id | file_path)` converte voice
   notes em texto no servidor, com cache por mensagem em `<media_dir>/.transcripts/`.
   Backends: API compatível com a OpenAI (OpenAI, Groq, whisper.cpp) ou `faster-whisper`

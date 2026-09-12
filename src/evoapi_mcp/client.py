@@ -24,6 +24,7 @@ from evoapi_mcp.formatters import (
     message_matches,
     truncate,
 )
+from evoapi_mcp.drive import DriveClient, DriveError
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
 
 PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
@@ -89,6 +90,7 @@ class EvolutionClient:
         self.timeout = config.timeout
         self.media_dir = Path(config.media_dir)
         self.transcriber = Transcriber(config)
+        self.drive = DriveClient(config)
 
         # Headers padrão para todas as requisições
         self.headers = {
@@ -1095,6 +1097,52 @@ class EvolutionClient:
         if cut:
             result["truncated"] = True
         return result
+
+    # =========================================================================
+    # ARQUIVAMENTO NO GOOGLE DRIVE
+    # =========================================================================
+
+    def archive_media(
+        self,
+        message_id: str,
+        folder: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Baixa o anexo de uma mensagem e envia ao Drive, sem passar pela conversa.
+
+        Args:
+            message_id: id da mensagem com o anexo
+            folder: caminho da pasta, relativo a EVOLUTION_DRIVE_ROOT
+                    (ex: "MR/2026/08.2026/BOLETO")
+            filename: nome final do arquivo (padrão: o nome original)
+
+        Returns:
+            dict: {id, name, folder, size, link, source}
+        """
+        if not self.drive.available:
+            raise DriveError(self.drive.describe()["hint"])
+
+        baixado = self.download_media(message_id, filename=filename)
+        enviado = self.drive.upload_file(
+            baixado["path"],
+            name=filename or baixado["file"],
+            folder=folder,
+            mime=baixado.get("mime"),
+        )
+        enviado["source"] = {"message_id": message_id, "path": baixado["path"]}
+        return enviado
+
+    def archive_file(
+        self,
+        file_path: str,
+        folder: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Envia ao Drive um arquivo que já está no disco do servidor."""
+        if not self.drive.available:
+            raise DriveError(self.drive.describe()["hint"])
+        path = Path(os.path.expandvars(file_path)).expanduser()
+        return self.drive.upload_file(path, name=filename, folder=folder)
 
     # =========================================================================
     # INSTANCE OPERATIONS
