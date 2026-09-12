@@ -126,6 +126,22 @@ EVOLUTION_TRANSCRIBE_MODEL=small
 Sem nenhum dos dois, `transcribe_audio` devolve um erro explicando o que configurar.
 `get_instance_info()` mostra o backend ativo.
 
+### Documento sem camada de texto
+
+Comprovante fotografado e PDF escaneado não têm texto para extrair. `view_media`
+devolve a página como **imagem de verdade** pelo protocolo, e o modelo lê com a própria
+visão, sem OCR:
+
+```
+view_media(message_id="...", page=1, pages=1)
+```
+
+Custa cerca de 1.500 tokens por página, contra dezenas de milhares do base64, que ainda
+por cima chega como texto e é ilegível para o modelo. Para documento que já tem texto,
+`download_media(extract_text=True)` continua muito mais barato.
+
+Requer o extra `[image]` (pypdfium2 e Pillow).
+
 ### PDFs protegidos por senha
 
 Boletos costumam vir cifrados. Passe a senha e o arquivo é gravado **já destravado**,

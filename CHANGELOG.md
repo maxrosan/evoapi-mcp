@@ -49,6 +49,11 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
   sem imprimir o segredo na tela
 - Configuração: `EVOLUTION_DRIVE_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`,
   `_ROOT_ID`, `_ROOT`
+- **`view_media`: documento devolvido como imagem**, para o modelo ler comprovante
+  fotografado e PDF escaneado com a própria visão, sem OCR. É o que faltava para o
+  arquivamento inteiro caber num chat comum, sem sessão com terminal. Renderização por
+  pypdfium2 (BSD/Apache, sem dependência de sistema) no extra opcional `[image]`;
+  imagens limitadas a 1568px no lado maior, cerca de 1.500 tokens por página
 - **PDF protegido por senha destravado no servidor**: `download_media` e
   `archive_to_drive` aceitam `password` e gravam o arquivo já sem senha, usando pypdf.
   Antes isso exigia `qpdf` na máquina do usuário, o que prendia o fluxo a uma sessão

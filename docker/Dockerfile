@@ -3,6 +3,8 @@
 #
 # Build args:
 #   INSTALL_AUDIO=true|false  inclui faster-whisper e baixa o modelo (padrão: true)
+#   O extra [image] (pypdfium2 + Pillow) entra sempre: é o que permite ler
+#   comprovante escaneado, devolvendo a página como imagem.
 #   WHISPER_MODEL=small       modelo pré-baixado na imagem (tiny, base, small, medium)
 #
 # Comandos disponíveis no container:
@@ -41,9 +43,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Extra [pdf]: extração de texto de PDF. Extra [audio]: transcrição local.
 RUN pip install --no-cache-dir --upgrade pip && \
     if [ "$INSTALL_AUDIO" = "true" ]; then \
-        pip install --no-cache-dir ".[pdf,audio]"; \
+        pip install --no-cache-dir ".[pdf,audio,image]"; \
     else \
-        pip install --no-cache-dir ".[pdf]"; \
+        pip install --no-cache-dir ".[pdf,image]"; \
     fi
 
 # Pré-baixar o modelo de transcrição: sem isso cada restart do container
