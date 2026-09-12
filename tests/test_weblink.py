@@ -132,6 +132,19 @@ def test_fetch_explains_a_private_drive_link(web):
     assert web.urls == ["https://drive.google.com/uc?export=download&id=XYZ"]
 
 
+def test_the_drive_hint_stays_out_of_unrelated_errors(web):
+    """A dica só vale para link do Drive; em qualquer outra URL ela confunde."""
+    web.respostas.append(FakeResponse(status=404))
+    with pytest.raises(WebLinkError) as erro:
+        weblink.fetch("https://exemplo.com/sumiu.png")
+    assert "Drive" not in str(erro.value)
+
+    web.respostas.append(FakeResponse(content=b"<html/>", headers={"Content-Type": "text/html"}))
+    with pytest.raises(WebLinkError) as erro:
+        weblink.fetch("https://exemplo.com/pagina")
+    assert "Drive" not in str(erro.value)
+
+
 def test_fetch_reports_http_errors(web):
     web.respostas.append(FakeResponse(status=404))
     with pytest.raises(WebLinkError, match="404"):
@@ -174,6 +187,17 @@ def test_send_url_downloads_then_sends(client, config, web):
     salvo = Path(out["_file"]["path"])
     assert salvo.parent == Path(config.media_dir) / "web"
     assert salvo.read_bytes() == PNG
+
+
+def test_send_url_prefers_the_extension_over_a_generic_content_type(client, web):
+    """octet-stream não diz nada ao WhatsApp; o nome do arquivo diz."""
+    web.respostas.append(FakeResponse(headers={"Content-Type": "binary/octet-stream"}))
+    client.responses.append({})
+
+    client.send_url("5511999999999", "https://exemplo.com/cartaz.png")
+
+    assert client.calls[0]["data"]["mimetype"] == "image/png"
+    assert client.calls[0]["data"]["mediatype"] == "image"
 
 
 def test_send_url_sends_a_pdf_as_document(client, web):

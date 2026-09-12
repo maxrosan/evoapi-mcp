@@ -46,6 +46,13 @@ def _log(message: str, level: str = "INFO") -> None:
     print(f"[{level}] Link: {message}", file=sys.stderr)
 
 
+def _dica_drive(url: str) -> str:
+    """A dica sobre compartilhamento só serve para link do Drive; em outra URL é ruído."""
+    if (urlparse(url).hostname or "").lower().endswith("google.com"):
+        return " No Drive, o arquivo precisa estar compartilhado como 'qualquer pessoa com o link'."
+    return ""
+
+
 def normalize(url: str) -> str:
     """Troca o link de compartilhamento pelo link do arquivo em si.
 
@@ -154,8 +161,7 @@ def fetch(url: str, timeout: int = 30, max_bytes: int = MAX_FETCH_BYTES) -> dict
     if resposta.status_code >= 400:
         resposta.close()
         raise WebLinkError(
-            f"O servidor respondeu {resposta.status_code} para {atual}. "
-            "Se o link é do Drive, confira se está compartilhado como 'qualquer pessoa com o link'."
+            f"O servidor respondeu {resposta.status_code} para {atual}.{_dica_drive(atual)}"
         )
 
     mime = (resposta.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -185,8 +191,7 @@ def fetch(url: str, timeout: int = 30, max_bytes: int = MAX_FETCH_BYTES) -> dict
 
     if mime in _HTML_TYPES:
         raise WebLinkError(
-            "O endereço devolveu uma página HTML, não um arquivo. Link do Drive precisa "
-            "estar compartilhado como 'qualquer pessoa com o link'."
+            f"O endereço devolveu uma página HTML, não um arquivo: {atual}.{_dica_drive(atual)}"
         )
 
     nome = _file_name_from(resposta, atual, mime)

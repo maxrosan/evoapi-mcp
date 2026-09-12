@@ -1136,6 +1136,11 @@ class EvolutionClient:
         mime = baixado["mime"]
         nome = self._safe_filename(file_name or baixado["file_name"])
 
+        # Muito servidor devolve octet-stream para qualquer arquivo. Com isso o
+        # WhatsApp não sabe o que exibir, e a extensão do nome diz mais.
+        if mime in ("", "application/octet-stream", "binary/octet-stream"):
+            mime = mimetypes.guess_type(nome)[0] or mime
+
         if not media_type:
             raiz = mime.split("/")[0]
             media_type = (
