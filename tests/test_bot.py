@@ -75,9 +75,9 @@ class FakeAnthropic:
 
 
 @pytest.fixture
-def bot(client):
+def bot(client, eventos):
     client.config.instance_name = MEU_NUMERO
-    b = Bot(client, anthropic_client=FakeAnthropic())
+    b = Bot(client, anthropic_client=FakeAnthropic(), events=eventos)
     # find_messages (contexto) e send_text usam a fila de respostas do cliente falso
     return b
 
@@ -271,8 +271,8 @@ def test_custo_e_contabilizado(bot, client):
 # dependências
 # ---------------------------------------------------------------------------
 
-def test_sem_chave_avisa_claro(client, monkeypatch):
+def test_sem_chave_avisa_claro(client, eventos, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    b = Bot(client)
+    b = Bot(client, events=eventos)
     with pytest.raises(BotError, match="ANTHROPIC_API_KEY"):
         _ = b.anthropic

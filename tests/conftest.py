@@ -43,3 +43,24 @@ def client(config):
 
     c._make_request = fake_request
     return c
+
+
+@pytest.fixture(autouse=True)
+def registro_limpo():
+    """Zera o registro global entre testes: ele persiste "já tratei" de propósito."""
+    from evoapi_mcp import webhook
+    from evoapi_mcp.store import MemoryStore
+
+    anterior = webhook.EVENTS
+    webhook.EVENTS = webhook.EventLog(store=MemoryStore())
+    yield webhook.EVENTS
+    webhook.EVENTS = anterior
+
+
+@pytest.fixture
+def eventos():
+    """Um registro isolado, para injetar no Bot."""
+    from evoapi_mcp.webhook import EventLog
+    from evoapi_mcp.store import MemoryStore
+
+    return EventLog(store=MemoryStore())

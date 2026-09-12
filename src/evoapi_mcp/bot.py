@@ -108,6 +108,7 @@ class Bot:
         model: str | None = None,
         budget: DailyBudget | None = None,
         skip_self_chat: bool = True,
+        events: Any = None,
     ):
         self.client = client
         self.model = model or os.environ.get("EVOLUTION_BOT_MODEL", "").strip() or DEFAULT_MODEL
@@ -117,6 +118,11 @@ class Bot:
             float(os.environ.get("EVOLUTION_BOT_PRICE_OUT", "25") or 25),
         )
         self.skip_self_chat = skip_self_chat
+        # Injetável: o padrão é o registro do processo, mas teste e uso embutido
+        # passam o seu. Singleton global escondido dentro de método é armadilha.
+        if events is None:
+            from evoapi_mcp.webhook import EVENTS as events
+        self.events = events
         self._anthropic = anthropic_client
         self._seen: deque[str] = deque(maxlen=MAX_SEEN)
         self._sent: deque[str] = deque(maxlen=MAX_SEEN)
@@ -164,6 +170,10 @@ class Bot:
             return False, "mensagem enviada pelo próprio bot"
         if message_id in self._seen:
             return False, "já processada"
+        # O registro compartilhado cobre reinício do processo e o caso de uma
+        # sessão em laço já ter respondido esta mesma instrução.
+        if self.events.is_handled(message_id):
+            return False, "já tratada (registro)"
 
         chat = (raw or {}).get("key", {}).get("remoteJid") or resumo.get("chat") or ""
         if self.skip_self_chat and self.is_self_chat(chat, raw):
@@ -189,6 +199,9 @@ class Bot:
         self._seen.append(message_id)
         chat = (raw or {}).get("key", {}).get("remoteJid") or resumo.get("chat")
         instrucao = instruction_of(resumo.get("preview")) or ""
+        # Marca ANTES de responder: se algo estourar no meio, o pior caso é uma
+        # instrução não respondida, e não a mesma resposta saindo duas vezes.
+        self.events.mark_handled([message_id], chat=chat, instruction=instrucao)
 
         _log(f"acionado em {resumo.get('chat_type')} ({message_id})")
         try:

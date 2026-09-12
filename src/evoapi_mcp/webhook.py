@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from evoapi_mcp.formatters import clean, compact_message, jid_to_number
+from evoapi_mcp.store import build_store
 
 # Prefixo que, no futuro, aciona o bot. Aqui só é sinalizado.
 TRIGGER_PREFIX = "ia:"
@@ -94,25 +95,37 @@ class EventLog:
     laço possa perguntar "o que sobrou?" sem reprocessar nem varrer conversas.
     """
 
-    def __init__(self, maxlen: int = MAX_EVENTS):
+    def __init__(self, maxlen: int = MAX_EVENTS, store: Any = None):
         self._eventos: deque[dict[str, Any]] = deque(maxlen=maxlen)
-        self._tratados: deque[str] = deque(maxlen=maxlen * 2)
+        self.store = store if store is not None else build_store()
         self.total = 0
         self.started = datetime.now()
 
     def pending(self, limit: int = 10) -> list[dict[str, Any]]:
         """Acionamentos ainda não tratados, do mais antigo para o mais novo."""
-        return [
-            e for e in self._eventos
-            if e.get("trigger") and e.get("message_id") not in self._tratados
-        ][:limit]
+        acionamentos = [e for e in self._eventos if e.get("trigger") and e.get("message_id")]
+        if not acionamentos:
+            return []
+        tratados = self.store.handled_among(e["message_id"] for e in acionamentos)
+        return [e for e in acionamentos if e["message_id"] not in tratados][:limit]
 
-    def mark_handled(self, message_ids: list[str]) -> int:
+    def is_handled(self, message_id: str) -> bool:
+        """True se este acionamento já foi tratado (consulta o armazenamento)."""
+        return bool(message_id) and self.store.is_handled(message_id)
+
+    def mark_handled(self, message_ids: list[str], chat: str | None = None,
+                     instruction: str | None = None) -> int:
         """Marca acionamentos como tratados. Devolve quantos passaram a contar."""
+        detalhes = {
+            e["message_id"]: e for e in self._eventos
+            if e.get("message_id") and e.get("trigger")
+        }
         novos = 0
         for mid in message_ids or []:
-            if mid and mid not in self._tratados:
-                self._tratados.append(mid)
+            if not mid:
+                continue
+            e = detalhes.get(mid, {})
+            if self.store.mark(mid, chat or e.get("chat"), instruction or e.get("preview")):
                 novos += 1
         return novos
 
@@ -146,6 +159,7 @@ class EventLog:
             "minhas_mensagens": sum(1 for e in self._eventos if e.get("from_me")),
             "acionamentos": sum(1 for e in self._eventos if e.get("trigger")),
             "pendentes": len(self.pending(limit=999)),
+            "armazenamento": self.store.describe(),
             "eventos": eventos[-limit:],
         }
 

@@ -134,6 +134,19 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
   trava de raio de alcance vira instrução em vez de estrutura, porque a sessão tem todas
   as ferramentas, inclusive as de envio
 
+### 💾 Registro persistente do que já foi tratado
+
+- **`store.py`**: com `EVOLUTION_DB_URL` apontando para um Postgres, o "já respondi isto"
+  sobrevive a restart e deploy. Sem a variável, cai para memória, como antes
+- Sem isso, um deploy fazia o laço responder de novo a instruções antigas, em conversa
+  de terceiro. É o tipo de erro que aparece publicamente
+- Banco fora do ar não derruba nada: degrada para memória e diz isso em
+  `get_instance_info`. E numa falha de consulta o registro responde "já tratado",
+  porque repetir uma resposta em público é pior que atrasá-la
+- O bot do servidor e a sessão em laço passam a compartilhar o mesmo registro, então um
+  não repete o que o outro já respondeu
+- Extra opcional `[db]` (psycopg)
+
 ---
 
 ## [1.1.0] - 2025-10-24

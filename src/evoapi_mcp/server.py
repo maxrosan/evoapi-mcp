@@ -457,6 +457,8 @@ def get_instance_info(full: bool = False) -> str:
         info.pop("info", None)
     info["transcription"] = client.transcriber.describe()
     info["drive"] = client.drive.describe()
+    from evoapi_mcp.webhook import EVENTS
+    info["armazenamento"] = EVENTS.store.describe()
     return _out(info)
 
 
@@ -499,7 +501,11 @@ def mark_triggers_handled(message_ids: list[str]) -> str:
     """
     from evoapi_mcp.webhook import EVENTS
 
-    return _out({"marcados": EVENTS.mark_handled(message_ids), "restantes": len(EVENTS.pending(limit=999))})
+    return _out({
+        "marcados": EVENTS.mark_handled(message_ids),
+        "restantes": len(EVENTS.pending(limit=999)),
+        "armazenamento": EVENTS.store.describe(),
+    })
 
 
 @mcp.tool()
