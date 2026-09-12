@@ -104,6 +104,26 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Privacidade: no máximo 80 caracteres de prévia por mensagem, nunca conteúdo de mídia,
   histórico só em memória
 
+### 🤖 O bot "IA:" (desligado por padrão)
+
+- **`bot.py`**: quando Max escreve "IA:" numa conversa, o servidor responde ali mesmo.
+  Ligado por `EVOLUTION_BOT_ENABLED=1`; **sem essa variável nada responde a ninguém**,
+  porque passar a falar com terceiros não pode acontecer por acidente num deploy
+- **O raio de alcance é estrutural, não uma instrução**: o modelo não recebe nenhuma
+  ferramenta de envio. A resposta final é o único canal de saída e vai para a conversa
+  que acionou. Ele não tem como escrever para outra pessoa nem que queira
+- Ferramentas de leitura presas à conversa: transcrever áudio, ler documento e buscar
+  no histórico dela
+- Travas: só `fromMe` mais o prefixo aciona; ids já vistos e os enviados pelo próprio
+  bot são ignorados, o que fecha o laço; a conversa pessoal fica de fora; teto de gasto
+  diário em dólares
+- O histórico das outras pessoas entra como dado, e o prompt de sistema diz isso, porque
+  conversa de grupo é território hostil para injeção
+- Modelo padrão `claude-opus-5` com fallback de recusa, ajustável por
+  `EVOLUTION_BOT_MODEL`. Extra opcional `[bot]`
+- Processamento fora do ciclo da requisição: a Evolution recebe o 200 na hora e a
+  resposta sai numa thread, senão ela reenviaria o evento
+
 ---
 
 ## [1.1.0] - 2025-10-24

@@ -11,6 +11,9 @@ Variáveis de ambiente:
     EVOLUTION_WEBHOOK_SECRET  opcional; ativa o receptor de eventos da Evolution
                               em /webhook/<segredo>, e a leitura em
                               /webhook/<segredo>/log. Sem ela as duas rotas não existem.
+    EVOLUTION_BOT_ENABLED     "1" liga o bot "IA:". **Desligado por padrão**: sem isto
+                              o receptor apenas observa, sem responder a ninguém.
+    ANTHROPIC_API_KEY         necessária quando o bot está ligado.
 
 Uso:
     python -m evoapi_mcp.mcp_http
@@ -21,6 +24,7 @@ import hmac
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 src_dir = Path(__file__).parent.parent
@@ -40,6 +44,30 @@ def build_app(token: str):
     # configuração de webhook da Evolution nem sempre deixa mandar cabeçalho.
     webhook_secret = os.environ.get("EVOLUTION_WEBHOOK_SECRET", "").strip()
     eventos = EventLog()
+
+    # O bot fica DESLIGADO até alguém dizer o contrário. Ligar significa passar a
+    # responder a terceiros, e isso não deve acontecer por acidente num deploy.
+    bot = None
+    executor = None
+    if os.environ.get("EVOLUTION_BOT_ENABLED", "").strip() == "1":
+        from evoapi_mcp.bot import Bot
+        from evoapi_mcp.server import client as evolution_client
+
+        bot = Bot(evolution_client)
+        # Uma thread só: as respostas saem em ordem e duas não se atropelam.
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bot")
+        print(f"Bot 'IA:' LIGADO (modelo {bot.model})", file=sys.stderr)
+    else:
+        print("Bot 'IA:' desligado; o receptor apenas observa.", file=sys.stderr)
+
+    def processar(payload, resumo):
+        """Roda fora do ciclo da requisição: a Evolution só quer o 200 rápido."""
+        try:
+            resultado = bot.handle(resumo, (payload or {}).get("data"))
+            if resultado.get("acao") not in ("ignorado",):
+                print(f"[INFO] Bot: {resultado}", file=sys.stderr)
+        except Exception as e:  # nunca deixar a thread morrer calada
+            print(f"[ERROR] Bot: falha ao processar: {e}", file=sys.stderr)
 
     # Atrás de proxy (Easypanel/Traefik) o Host não é localhost: desliga a proteção de DNS rebinding
     mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
@@ -90,7 +118,9 @@ def build_app(token: str):
                         payload = json.loads(await read_body(receive) or b"{}")
                     except ValueError:
                         payload = {"event": "?", "erro": "corpo inválido"}
-                    eventos.add(payload)
+                    resumo = eventos.add(payload)
+                    if bot is not None and resumo.get("trigger"):
+                        executor.submit(processar, payload, resumo)
                     # A Evolution só quer um 200; qualquer outra coisa vira reenvio.
                     await respond(send, 200, b'{"ok":true}', b"application/json")
                     return

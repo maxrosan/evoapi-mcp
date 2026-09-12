@@ -26,6 +26,9 @@ image = [
     "pypdfium2>=4.30.0",
     "pillow>=10.0.0",
 ]
+bot = [
+    "anthropic>=0.70.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
