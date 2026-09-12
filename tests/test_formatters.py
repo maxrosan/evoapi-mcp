@@ -236,3 +236,12 @@ def test_message_matches():
 def test_dumps_is_compact_and_keeps_accents():
     s = dumps({"a": "ção", "b": [1, 2]})
     assert s == '{"a":"ção","b":[1,2]}'
+
+
+def test_size_accepts_protobuf_long():
+    """fileLength chega como Long do protobuf em algumas mensagens."""
+    rec = raw_document_message()
+    rec["message"]["documentMessage"]["fileLength"] = {"low": 48213, "high": 0, "unsigned": True}
+    assert compact_message(rec)["size"] == 48213
+    rec["message"]["documentMessage"]["fileLength"] = {"low": 0, "high": 1}
+    assert compact_message(rec)["size"] == 4294967296

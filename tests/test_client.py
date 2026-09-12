@@ -231,3 +231,14 @@ def test_instance_info_reads_nested_state(client):
 def test_instance_info_reads_flat_state(client):
     client.responses.append({"state": "connecting"})
     assert client.get_instance_info()["status"] == "connecting"
+
+
+def test_download_media_explains_message_without_content(client):
+    """A Evolution API devolve um TypeError quando o registro não tem `message`."""
+    def boom(data):
+        raise EvolutionAPIError(
+            "HTTP 400: {\"message\":[\"TypeError: Cannot read properties of null (reading 'ephemeralMessage')\"]}"
+        )
+    client.responses.append(boom)
+    with pytest.raises(EvolutionAPIError, match="salva sem conteúdo"):
+        client.download_media("MSG1")

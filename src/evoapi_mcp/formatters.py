@@ -181,6 +181,12 @@ def _extract_text(msg: dict[str, Any], kind: str, media: dict[str, Any] | None) 
 
 
 def _to_int(v: Any) -> int | None:
+    """Converte para int. Aceita o Long do protobuf ({low, high}) usado pelo WhatsApp."""
+    if isinstance(v, dict):
+        try:
+            v = int(v.get("low", 0)) + (int(v.get("high", 0)) << 32)
+        except (TypeError, ValueError):
+            return None
     try:
         return int(v) if v not in (None, "") else None
     except (TypeError, ValueError):

@@ -799,7 +799,19 @@ class EvolutionClient:
         Returns:
             dict: {path, file, mime, size, type?, pages?, text?, text_truncated?, text_error?}
         """
-        data = self.get_media(message_id)
+        try:
+            data = self.get_media(message_id)
+        except EvolutionAPIError as e:
+            # A Evolution API guarda algumas mensagens sem o campo `message`
+            # (histórico sincronizado, mensagens efêmeras). Sem ele a mídia não
+            # pode ser baixada, e a API devolve um TypeError pouco claro.
+            if "ephemeralMessage" in str(e) or "properties of null" in str(e):
+                raise EvolutionAPIError(
+                    f"A mensagem {message_id} está salva sem conteúdo no banco da Evolution API, "
+                    "então a mídia não pode mais ser baixada. Isso afeta uma fração das mensagens "
+                    "antigas ou sincronizadas do histórico. Tente outra mensagem."
+                ) from e
+            raise
         b64 = data.get("base64") if isinstance(data, dict) else None
         if not b64:
             raise EvolutionAPIError(
