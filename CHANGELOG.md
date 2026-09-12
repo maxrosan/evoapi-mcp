@@ -7,6 +7,66 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.2.0] - 2026-09-11
+
+### 🪙 Economia de tokens com Claude
+
+Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM e elimina o tráfego de base64 pelo chat.
+
+### ✨ Adicionado
+
+- **`formatters.py`**: formatadores compactos para mensagens, chats, contatos e resultados de envio
+  (campos nulos omitidos, JSON sem espaços, acentos sem escape, ~10x menor que o objeto bruto)
+- **`download_media(message_id, save_dir?, filename?, extract_text?, max_chars?)`**: baixa o anexo
+  para `EVOLUTION_MEDIA_DIR` e devolve só `{path, file, mime, size, type}`; com `extract_text=True`
+  extrai o texto de PDF (via `pypdf`, extra opcional `[pdf]`) ou txt
+- **`send_file(number, file_path, caption?, media_type?, file_name?)`**: envia arquivo local;
+  o servidor gera o base64, o LLM nunca vê o conteúdo
+- **`send_document_base64` / `send_image_base64` / `get_media_base64`**: paridade com o conector
+  remoto, marcadas como caras (prefira `send_file` / `download_media`)
+- **Busca textual local** em `find_messages` e `get_chat_messages(query=...)`: varre até 500
+  mensagens no servidor e devolve só as que casam
+- **`get_contacts(search=...)`**: filtra contatos por nome/número sem listar todos
+- **`clear_cache`** exposta como tool
+- Parâmetros `page`, `max_text` e `full` nas tools de leitura
+- Configuração: `EVOLUTION_MEDIA_DIR`, `EVOLUTION_DEFAULT_LIMIT` (20), `EVOLUTION_MAX_TEXT_CHARS` (500)
+- HTTP: `GET /messages` (busca), `POST /messages/file`, `POST /messages/base64`, `POST /media/download`,
+  `full`/`search`/`query` nos endpoints de leitura
+- Suite pytest em `tests/` (formatadores e cliente com HTTP simulado)
+- **Endereçamento `@lid`**: `resolve_chat_jid` encontra a conversa real pela lista de chats
+  (`remoteJidAlt`), mensagens compactas preferem o telefone (`participantAlt`/`remoteJidAlt`)
+  ao id opaco, envio aceita jid (`@lid`/`@g.us`) sem mutilá-lo em número
+- **`mcp_http.py`** (`evoapi-mcp-http`): MCP via Streamable HTTP com Bearer token
+  (`MCP_AUTH_TOKEN`, `PORT`), substituindo o wrapper externo usado no Easypanel
+- Console scripts `evoapi-mcp` (stdio) e `evoapi-mcp-http`
+- **Transcrição de áudios**: tool `transcribe_audio(message_id | file_path)` converte voice
+  notes em texto no servidor, com cache por mensagem em `<media_dir>/.transcripts/`.
+  Backends: API compatível com a OpenAI (OpenAI, Groq, whisper.cpp) ou `faster-whisper`
+  local (extra opcional `[audio]`). `download_media(extract_text=True)` transcreve
+  automaticamente anexos de áudio e vídeo; `get_instance_info()` reporta o backend ativo
+- Mensagens de áudio compactas trazem `voice: true` para voice notes e `seconds`
+- HTTP: `POST /media/transcribe`
+- Configuração: `EVOLUTION_TRANSCRIBE_BACKEND`, `_API_URL`, `_API_KEY`, `_MODEL`,
+  `_LANGUAGE`, `_TIMEOUT`, `_MAX_MB`
+
+### 🔄 Alterado
+
+- Tools devolvem uma string JSON compacta em vez de dict (evita `indent=2` e duplicação em `structuredContent`)
+- Docstrings das tools encurtadas (menos tokens no esquema enviado a cada requisição)
+- `findMessages` agora envia `where.key.remoteJid` + `page`/`offset` (v2) além de `limit` (v1);
+  antes `chatId`/`limit` eram ignorados pela API v2
+- Limites padrão: 50 → 20 mensagens; `list_chats`/`get_contacts` deixam de devolver tudo
+- Erros HTTP têm o corpo resumido (HTML e stack traces removidos, 400 chars)
+- `get_contact_name` cai para o mapa de contatos em cache quando o filtro por id não retorna nada
+- `mcp` fixado em `<2` (a 2.x renomeou `FastMCP`)
+
+### 🐛 Corrigido
+
+- HTTP: `/chats` chamava `find_chats(limit=)` inexistente; `/instance/status` e `/presence`
+  chamavam métodos/argumentos inexistentes
+
+---
+
 ## [1.1.0] - 2025-10-24
 
 ### 🐳 Docker & HTTP Support

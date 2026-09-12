@@ -42,6 +42,116 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ Error handling robusto
 - ✅ Logs estruturados
 
+### 🎙️ Áudios (v1.2)
+- ✅ Transcrição de voice notes em texto, feita no servidor
+- ✅ Backend local (`faster-whisper`) ou API compatível com a OpenAI (OpenAI, Groq, whisper.cpp)
+- ✅ Cache de transcrição por mensagem
+- ✅ `download_media(extract_text=True)` transcreve quando o anexo é áudio ou vídeo
+
+### 🪙 Economia de tokens (v1.2)
+- ✅ Respostas compactas por padrão (~10x menos tokens que o JSON bruto do WhatsApp)
+- ✅ `download_media` grava o anexo em disco e devolve só caminho + metadados (nunca base64)
+- ✅ `send_file` envia arquivo local sem passar base64 pelo chat
+- ✅ Extração de texto de PDF/txt (`extract_text=True`) para identificar documentos sem abri-los
+- ✅ Busca textual local em `find_messages`/`get_chat_messages` (só as mensagens que casam voltam)
+- ✅ Limites padrão menores (20 itens) e corte de texto configurável
+- ✅ Erros HTTP truncados (sem páginas HTML/stack traces no contexto)
+
+---
+
+## 🪙 Uso econômico com Claude
+
+O JSON bruto da Evolution API traz thumbnails em base64, chaves de mídia, hashes e
+metadados de dispositivo em cada mensagem: 50 mensagens podem custar 30-50 mil tokens.
+Nesta versão as tools devolvem apenas o essencial:
+
+```json
+{"id":"3EB0ABC","ts":"2025-09-11 14:03","from":"5511999999999","name":"Contador",
+ "type":"document","text":"Segue o boleto","file":"boleto-setembro.pdf",
+ "mime":"application/pdf","size":48213}
+```
+
+Fluxo recomendado para arquivos recebidos:
+
+1. `get_chat_messages(number, limit=10)` ou `find_messages(query="boleto")`
+2. `download_media(message_id=id, extract_text=True)` → `{path, file, mime, size, text}`
+3. Use o `path` local (mover, renomear, subir para o Drive) ou `send_file(number, path)` para reenviar
+
+| Variável | Padrão | Efeito |
+|----------|--------|--------|
+| `EVOLUTION_MEDIA_DIR` | `~/.evoapi-mcp/media` | Pasta onde `download_media` grava os anexos |
+| `EVOLUTION_DEFAULT_LIMIT` | `20` | Itens por chamada quando `limit` não é informado |
+| `EVOLUTION_MAX_TEXT_CHARS` | `500` | Corte do texto de cada mensagem (`0` = sem corte) |
+
+Todas as tools de leitura aceitam `full=True` para devolver o objeto bruto quando você
+realmente precisar dele. `get_media_base64` continua disponível por compatibilidade,
+mas custa dezenas de milhares de tokens: prefira `download_media`.
+
+Para extrair texto de PDF instale o extra opcional:
+
+```bash
+pip install -e ".[pdf]"
+```
+
+### Transcrição de áudios
+
+Um voice note de 1 minuto tem cerca de 500 KB. Em base64 isso passa de 600 mil
+caracteres, o que é impraticável mandar para o modelo. A transcrição roda no servidor
+e só o texto volta:
+
+```
+transcribe_audio(message_id="3EB0ABC")
+→ {"text":"Bom dia, consegue enviar o boleto hoje?","backend":"api",
+   "model":"whisper-1","language":"pt","seconds":6.2,"path":"...","cached":false}
+```
+
+Mensagens de áudio aparecem nas listagens com `"type":"audio"` e `"voice":true` quando
+são gravadas na hora. Passe o `id` delas para `transcribe_audio`. O resultado fica em
+cache em `<EVOLUTION_MEDIA_DIR>/.transcripts/<id>.json`, então repetir a pergunta não
+transcreve de novo.
+
+Escolha um backend:
+
+```bash
+# Opção 1: API compatível com a OpenAI (nada para instalar)
+EVOLUTION_TRANSCRIBE_API_KEY=sk-...          # ou OPENAI_API_KEY / GROQ_API_KEY
+EVOLUTION_TRANSCRIBE_API_URL=https://api.groq.com/openai/v1/audio/transcriptions  # opcional
+
+# Opção 2: modelo local, sem chave e sem rede
+pip install -e ".[audio]"
+EVOLUTION_TRANSCRIBE_BACKEND=local
+EVOLUTION_TRANSCRIBE_MODEL=small
+```
+
+Sem nenhum dos dois, `transcribe_audio` devolve um erro explicando o que configurar.
+`get_instance_info()` mostra o backend ativo.
+
+### Conversas `@lid`
+
+O WhatsApp está migrando conversas de `<numero>@s.whatsapp.net` para `<id opaco>@lid`;
+nesses casos o telefone só aparece em `remoteJidAlt`/`participantAlt`. As tools tratam isso:
+`get_chat_messages(number)` resolve o jid real pela lista de conversas (com cache), as
+mensagens compactas mostram o telefone em `from` sempre que ele existir, e `list_chats`
+devolve `jid` (para passar às outras tools) e `number` separados. Um jid `@lid` ou `@g.us`
+pode ser passado diretamente em `number`/`chat_id`.
+
+### MCP via HTTP com token (Easypanel, Docker, acesso remoto)
+
+Para expor o servidor MCP por Streamable HTTP protegido por Bearer token:
+
+```bash
+MCP_AUTH_TOKEN=um-segredo PORT=3000 python -m evoapi_mcp.mcp_http
+```
+
+O endpoint fica em `http://host:3000/mcp` e exige `Authorization: Bearer um-segredo`.
+Isso substitui o wrapper externo que fazia monkeypatch em `find_messages`: todas as
+tools (inclusive `get_media_base64`, `send_image_base64` e `send_document_base64`)
+já estão no `server.py`. Em uma imagem Docker, troque o `CMD` por:
+
+```dockerfile
+CMD ["python", "-m", "evoapi_mcp.mcp_http"]
+```
+
 ---
 
 ## 📋 Pré-requisitos

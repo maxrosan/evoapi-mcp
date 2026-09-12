@@ -1,5 +1,9 @@
 """Cliente HTTP direto para Evolution API."""
 
+import base64
+import json
+import mimetypes
+import os
 import sys
 import re
 import requests
@@ -13,6 +17,18 @@ if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
 from evoapi_mcp.config import EvolutionConfig
+from evoapi_mcp.formatters import (
+    compact_error,
+    compact_message,
+    extract_records,
+    message_matches,
+    truncate,
+)
+from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
+
+PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
+GROUP_JID_SUFFIX = "@g.us"
+LID_JID_SUFFIX = "@lid"
 
 
 # Constantes de validação
@@ -20,6 +36,22 @@ VALID_MEDIA_TYPES = {"image", "video", "document", "audio"}
 VALID_PRESENCE_STATUS = {"available", "unavailable", "composing", "recording"}
 MAX_TEXT_LENGTH = 65536  # 64KB - limite do WhatsApp
 MAX_CAPTION_LENGTH = 1024  # Limite de legenda
+MAX_SEARCH_SCAN = 500  # Máximo de mensagens varridas na busca local por texto
+SEARCH_PAGE_SIZE = 100  # Tamanho da página usado na varredura
+
+# Extensão -> tipo de mídia para send_file
+_EXT_MEDIA_TYPE = {
+    ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image", ".webp": "image",
+    ".mp4": "video", ".mov": "video", ".3gp": "video", ".mkv": "video",
+    ".mp3": "audio", ".ogg": "audio", ".opus": "audio", ".m4a": "audio", ".wav": "audio", ".aac": "audio",
+}
+
+# Mimetype -> extensão para mídias baixadas sem nome de arquivo
+_MIME_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+    "video/mp4": ".mp4", "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+    "application/pdf": ".pdf",
+}
 
 
 class EvolutionAPIError(Exception):
@@ -55,6 +87,8 @@ class EvolutionClient:
         self.api_key = config.api_token
         self.instance_id = config.instance_name
         self.timeout = config.timeout
+        self.media_dir = Path(config.media_dir)
+        self.transcriber = Transcriber(config)
 
         # Headers padrão para todas as requisições
         self.headers = {
@@ -64,6 +98,8 @@ class EvolutionClient:
 
         # Cache de nomes de contatos (número -> nome)
         self._contact_names_cache: dict[str, str | None] = {}
+        # número -> jid real da conversa (pode ser @lid); expira com o mesmo TTL
+        self._jid_cache: dict[str, tuple[str, datetime]] = {}
         self._cache_timestamp: datetime | None = None
         self._cache_ttl = timedelta(minutes=5)  # Cache expira após 5 minutos
 
@@ -160,6 +196,63 @@ class EvolutionClient:
                 f"Valores válidos: {', '.join(sorted(VALID_MEDIA_TYPES))}"
             )
 
+    @staticmethod
+    def _personal_jid_number(remote_jid: str | None) -> str:
+        """Dígitos de um jid @s.whatsapp.net; vazio para grupos e @lid."""
+        if not remote_jid or not remote_jid.endswith(PERSONAL_JID_SUFFIX):
+            return ""
+        return re.sub(r"\D", "", remote_jid[: -len(PERSONAL_JID_SUFFIX)])
+
+    @staticmethod
+    def _chat_alt_number(chat: dict[str, Any]) -> str:
+        """Telefone de uma conversa @lid, exposto em lastMessage.key.remoteJidAlt."""
+        key = (chat.get("lastMessage") or {}).get("key") or {}
+        alt = key.get("remoteJidAlt") or ""
+        return re.sub(r"\D", "", alt.split("@")[0])
+
+    def resolve_send_target(self, number: str) -> str:
+        """Destino de envio: número validado, ou jid (@lid/@g.us/@s.whatsapp.net) intacto.
+
+        Nunca remove os não-dígitos de um jid: '1000...@lid' viraria um número
+        de 15 dígitos válido que endereça outra pessoa.
+        """
+        if "@" in number:
+            return number.strip()
+        return self.validate_phone_number(number)
+
+    def resolve_chat_jid(self, identifier: str) -> tuple[str, bool]:
+        """Resolve número ou jid para o jid em que a conversa está salva.
+
+        O WhatsApp está migrando conversas de <numero>@s.whatsapp.net para
+        <id opaco>@lid; nesse caso o número só aparece em remoteJidAlt da
+        lista de conversas. Retorna (jid, resolvido). Quando não há
+        correspondência devolve o palpite <numero>@s.whatsapp.net com False.
+        """
+        if "@" in identifier:
+            return identifier.strip(), True
+
+        clean_number = self.validate_phone_number(identifier)
+        cached = self._jid_cache.get(clean_number)
+        if cached and datetime.now() - cached[1] <= self._cache_ttl:
+            return cached[0], True
+
+        fallback = f"{clean_number}{PERSONAL_JID_SUFFIX}"
+        try:
+            chats = self.find_chats(enrich_with_names=False)
+        except EvolutionAPIError as e:
+            self._log(f"Falha ao listar conversas para resolver {clean_number}: {e}", "WARNING")
+            return fallback, False
+
+        for chat in chats if isinstance(chats, list) else []:
+            remote_jid = chat.get("remoteJid") or ""
+            if remote_jid == fallback or (
+                remote_jid.endswith(LID_JID_SUFFIX) and self._chat_alt_number(chat) == clean_number
+            ):
+                self._jid_cache[clean_number] = (remote_jid, datetime.now())
+                return remote_jid, True
+
+        return fallback, False
+
     def _is_cache_expired(self) -> bool:
         """Verifica se o cache de contatos expirou.
 
@@ -180,6 +273,7 @@ class EvolutionClient:
             client.clear_cache()  # Cache será reconstruído na próxima chamada
         """
         self._contact_names_cache.clear()
+        self._jid_cache.clear()
         self._cache_timestamp = None
         self._log("Cache de contatos limpo")
 
@@ -230,7 +324,8 @@ class EvolutionClient:
                 return {"status": "success", "data": response.text}
 
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
+            # Corpo de erro truncado: páginas HTML/stack traces custam muitos tokens
+            error_msg = f"HTTP {e.response.status_code}: {compact_error(e.response.text)}"
             self._log(error_msg, "ERROR")
 
             # Detecta erros específicos
@@ -287,11 +382,10 @@ class EvolutionClient:
                     # Extrai o número do remoteJid
                     remote_jid = chat["remoteJid"]
                     # Ignora grupos (terminam com @g.us)
-                    if not remote_jid.endswith("@g.us"):
-                        number = remote_jid.replace("@s.whatsapp.net", "")
+                    if not remote_jid.endswith(GROUP_JID_SUFFIX):
+                        clean_number = self._personal_jid_number(remote_jid) or self._chat_alt_number(chat)
                         # Lookup local (muito mais rápido que HTTP)
-                        clean_number = re.sub(r'\D', '', number)
-                        if clean_number in contacts_map:
+                        if clean_number and clean_number in contacts_map:
                             chat["pushName"] = contacts_map[clean_number]
                             chat["_enriched"] = True
 
@@ -321,12 +415,10 @@ class EvolutionClient:
             for contact in contact_list:
                 # Extrai número do remoteJid (formato: 5511999999999@s.whatsapp.net)
                 remote_jid = contact.get("remoteJid", "")
-                # Ignora grupos (terminam com @g.us)
-                if remote_jid.endswith("@g.us"):
+                # Ignora grupos e ids opacos (@lid não é telefone)
+                clean_number = self._personal_jid_number(remote_jid)
+                if not clean_number:
                     continue
-
-                number = remote_jid.replace("@s.whatsapp.net", "")
-                clean_number = re.sub(r'\D', '', number)
 
                 # Pega o pushName
                 name = contact.get("pushName")
@@ -348,49 +440,98 @@ class EvolutionClient:
         self,
         query: str | None = None,
         chat_id: str | None = None,
-        limit: int = 50
+        limit: int = 50,
+        page: int = 1,
+        max_text: int | None = 500,
+        compact: bool = True,
     ) -> dict[str, Any]:
-        """Busca mensagens de uma conversa.
+        """Busca mensagens, opcionalmente filtrando por chat e por texto.
 
         Endpoint: POST /chat/findMessages/{instanceId}
 
+        A Evolution API não faz busca textual: quando `query` é informado, as
+        mensagens são varridas em páginas (até MAX_SEARCH_SCAN) e filtradas
+        localmente, devolvendo só as que casam. Isso evita mandar centenas de
+        mensagens irrelevantes para o LLM.
+
         Args:
-            query: Termo de busca nas mensagens (opcional)
-            chat_id: ID do chat específico (ex: 5511999999999@s.whatsapp.net)
-            limit: Número máximo de mensagens a retornar
+            query: Termo de busca (case-insensitive) em texto, legenda, nome de arquivo
+            chat_id: ID do chat (ex: 5511999999999@s.whatsapp.net)
+            limit: Máximo de mensagens retornadas
+            page: Página (1 = mais recentes)
+            max_text: Corte de texto por mensagem no modo compacto (0/None = sem corte)
+            compact: Se True, retorna mensagens compactas; se False, registros brutos
 
         Returns:
-            dict: Lista de mensagens
-
-        Raises:
-            EvolutionAPIError: Se houver erro na requisição
+            dict: {total?, pages?, page?, count, messages: [...]}
         """
-        self._log(f"Buscando mensagens (limit={limit})")
+        self._log(f"Buscando mensagens (limit={limit}, page={page}, query={'sim' if query else 'não'})")
 
-        payload = {}
         if query:
-            payload["query"] = query
-        if chat_id:
-            payload["chatId"] = chat_id
-        if limit:
-            payload["limit"] = limit
+            return self._search_messages_locally(query, chat_id, limit, max_text, compact)
 
-        return self._make_request(
-            "POST",
-            "/chat/findMessages/{instanceId}",
-            data=payload
-        )
+        raw = self._fetch_messages_page(chat_id, limit, page)
+        records, meta = extract_records(raw)
+        if not compact:
+            return {**meta, "count": len(records), "messages": records}
+        return {**meta, "count": len(records), "messages": [compact_message(r, max_text) for r in records]}
+
+    def _fetch_messages_page(self, chat_id: str | None, page_size: int, page: int) -> Any:
+        """Chama findMessages com os campos aceitos pela v1 (limit) e v2 (page/offset)."""
+        payload: dict[str, Any] = {"page": page, "offset": page_size, "limit": page_size}
+        if chat_id:
+            payload["where"] = {"key": {"remoteJid": chat_id}}
+        return self._make_request("POST", "/chat/findMessages/{instanceId}", data=payload)
+
+    def _search_messages_locally(
+        self,
+        query: str,
+        chat_id: str | None,
+        limit: int,
+        max_text: int | None,
+        compact: bool,
+    ) -> dict[str, Any]:
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        page = 1
+        while scanned < MAX_SEARCH_SCAN and len(matches) < limit:
+            raw = self._fetch_messages_page(chat_id, SEARCH_PAGE_SIZE, page)
+            records, meta = extract_records(raw)
+            if not records:
+                break
+            for record in records:
+                scanned += 1
+                c = compact_message(record, None)
+                if message_matches(c, query):
+                    matches.append(compact_message(record, max_text) if compact else record)
+                    if len(matches) >= limit:
+                        break
+            total_pages = meta.get("pages")
+            if total_pages is not None and page >= int(total_pages):
+                break
+            if len(records) < SEARCH_PAGE_SIZE:
+                break
+            page += 1
+        return {"query": query, "scanned": scanned, "count": len(matches), "messages": matches}
 
     def get_messages_by_number(
         self,
         number: str,
-        limit: int = 50
+        limit: int = 50,
+        page: int = 1,
+        max_text: int | None = 500,
+        compact: bool = True,
+        query: str | None = None,
     ) -> dict[str, Any]:
         """Obtém mensagens de uma conversa por número.
 
         Args:
             number: Número de telefone
             limit: Número máximo de mensagens
+            page: Página (1 = mais recentes)
+            max_text: Corte de texto por mensagem (modo compacto)
+            compact: Retorna mensagens compactas (True) ou brutas (False)
+            query: Filtro textual opcional
 
         Returns:
             dict: Mensagens da conversa
@@ -399,10 +540,18 @@ class EvolutionClient:
             InvalidPhoneNumberError: Se o número for inválido
             EvolutionAPIError: Se houver erro
         """
-        clean_number = self.validate_phone_number(number)
-        chat_id = f"{clean_number}@s.whatsapp.net"
-
-        return self.find_messages(chat_id=chat_id, limit=limit)
+        chat_id, resolved = self.resolve_chat_jid(number)
+        result = self.find_messages(
+            query=query, chat_id=chat_id, limit=limit, page=page, max_text=max_text, compact=compact
+        )
+        if isinstance(result, dict):
+            result["chat"] = chat_id
+            if not resolved and not result.get("count"):
+                result["hint"] = (
+                    "Nenhuma conversa encontrada para este número. "
+                    "Confira o jid em list_chats e passe-o diretamente."
+                )
+        return result
 
     def fetch_contacts(self, contact_id: str | None = None) -> list[dict[str, Any]]:
         """Busca contatos salvos no WhatsApp com filtros opcionais.
@@ -479,6 +628,9 @@ class EvolutionClient:
                 contact = contact_list[0]
                 # Retorna pushName
                 name = contact.get("pushName")
+            else:
+                # Algumas versões da API ignoram o filtro por id: usa o mapa em cache
+                name = self._build_contacts_map().get(clean_number)
 
             # Salva no cache e atualiza timestamp
             if use_cache:
@@ -520,7 +672,7 @@ class EvolutionClient:
             EvolutionAPIError: Erros da API
         """
         # Validações
-        clean_number = self.validate_phone_number(number)
+        clean_number = self.resolve_send_target(number)
         self.validate_text_length(text, MAX_TEXT_LENGTH, "text")
 
         self._log(f"Enviando mensagem de texto para {clean_number}")
@@ -565,7 +717,7 @@ class EvolutionClient:
             EvolutionAPIError: Erros da API
         """
         # Validações
-        clean_number = self.validate_phone_number(number)
+        clean_number = self.resolve_send_target(number)
         self.validate_media_type(media_type)
         self.validate_url(media_url, "media_url")
         if caption:
@@ -589,6 +741,348 @@ class EvolutionClient:
             "/message/sendMedia/{instanceId}",
             data=payload
         )
+
+    # =========================================================================
+    # MEDIA (download para disco / envio de arquivos locais)
+    # =========================================================================
+
+    def get_media(self, message_id: str, convert_to_mp4: bool = False) -> dict[str, Any]:
+        """Obtém a mídia de uma mensagem em base64 (resposta bruta da API).
+
+        Endpoint: POST /chat/getBase64FromMediaMessage/{instanceId}
+
+        Prefira `download_media`, que grava em disco e não devolve o base64.
+        """
+        if not message_id or not isinstance(message_id, str):
+            raise ValueError("message_id não pode ser vazio")
+        self._log(f"Baixando mídia da mensagem {message_id}")
+        payload = {"message": {"key": {"id": message_id}}, "convertToMp4": convert_to_mp4}
+        return self._make_request("POST", "/chat/getBase64FromMediaMessage/{instanceId}", data=payload)
+
+    @staticmethod
+    def _safe_filename(name: str) -> str:
+        name = os.path.basename(name or "").strip()
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+        return name[:150] or "media"
+
+    def _unique_path(self, directory: Path, filename: str) -> Path:
+        candidate = directory / filename
+        if not candidate.exists():
+            return candidate
+        stem, suffix = candidate.stem, candidate.suffix
+        for i in range(1, 1000):
+            candidate = directory / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                return candidate
+        raise EvolutionAPIError(f"Não foi possível gerar nome único para {filename}")
+
+    def download_media(
+        self,
+        message_id: str,
+        save_dir: str | None = None,
+        filename: str | None = None,
+        extract_text: bool = False,
+        max_chars: int = 3000,
+    ) -> dict[str, Any]:
+        """Baixa a mídia de uma mensagem e grava em disco.
+
+        O base64 nunca é devolvido ao chamador: só caminho e metadados. Isso
+        reduz o custo de tokens de dezenas/centenas de milhares para ~50.
+
+        Args:
+            message_id: id da mensagem (campo `id` das mensagens compactas)
+            save_dir: pasta de destino (padrão: EVOLUTION_MEDIA_DIR)
+            filename: nome do arquivo (padrão: nome original ou id + extensão)
+            extract_text: se True, extrai texto de PDF/texto puro (requer pypdf para PDF)
+            max_chars: limite de caracteres do texto extraído
+
+        Returns:
+            dict: {path, file, mime, size, type?, pages?, text?, text_truncated?, text_error?}
+        """
+        data = self.get_media(message_id)
+        b64 = data.get("base64") if isinstance(data, dict) else None
+        if not b64:
+            raise EvolutionAPIError(
+                f"API não retornou mídia para a mensagem {message_id}. "
+                "Verifique se o id é de uma mensagem com imagem/documento/áudio/vídeo."
+            )
+        if isinstance(b64, str) and b64.startswith("data:"):
+            b64 = b64.split(",", 1)[-1]
+        try:
+            content = base64.b64decode(b64)
+        except Exception as e:
+            raise EvolutionAPIError(f"Base64 inválido retornado pela API: {e}")
+
+        mime = (data.get("mimetype") or "application/octet-stream").split(";")[0].strip()
+        original = data.get("fileName") or ""
+        if not filename:
+            filename = original
+        if not filename:
+            ext = _MIME_EXT.get(mime) or mimetypes.guess_extension(mime) or ""
+            filename = f"{message_id}{ext}"
+        elif not Path(filename).suffix:
+            ext = _MIME_EXT.get(mime) or mimetypes.guess_extension(mime)
+            if ext:
+                filename = f"{filename}{ext}"
+
+        directory = Path(os.path.expandvars(save_dir)).expanduser() if save_dir else self.media_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, self._safe_filename(filename))
+        path.write_bytes(content)
+        self._log(f"Mídia salva em {path} ({len(content)} bytes)")
+
+        result: dict[str, Any] = {
+            "path": str(path),
+            "file": path.name,
+            "mime": mime,
+            "size": len(content),
+        }
+        if data.get("mediaType"):
+            result["type"] = data["mediaType"]
+        if extract_text:
+            result.update(self._extract_text(path, mime, content, max_chars))
+        return result
+
+    def _extract_text(self, path: Path, mime: str, content: bytes, max_chars: int) -> dict[str, Any]:
+        """Extrai texto de PDF, texto puro ou áudio (transcrição). Nunca lança exceção."""
+        text: str | None = None
+        pages: int | None = None
+        if is_transcribable(mime, path):
+            try:
+                result = self.transcriber.transcribe(path)
+            except TranscriptionError as e:
+                return {"text_error": str(e)}
+            out = {k: v for k, v in result.items() if k != "text"}
+            transcript, cut = truncate(result.get("text") or "", max_chars)
+            if not transcript:
+                out["text_error"] = "nenhuma fala reconhecida no áudio"
+                return out
+            out["text"] = transcript
+            if cut:
+                out["text_truncated"] = True
+            return out
+        try:
+            if mime == "application/pdf" or path.suffix.lower() == ".pdf":
+                try:
+                    from pypdf import PdfReader  # dependência opcional
+                except ImportError:
+                    return {"text_error": "pypdf não instalado (pip install pypdf)"}
+                reader = PdfReader(str(path))
+                pages = len(reader.pages)
+                parts: list[str] = []
+                total = 0
+                for page in reader.pages:
+                    chunk = page.extract_text() or ""
+                    parts.append(chunk)
+                    total += len(chunk)
+                    if max_chars and total >= max_chars:
+                        break
+                text = "\n".join(parts)
+            elif mime.startswith("text/") or path.suffix.lower() in (".txt", ".csv", ".md", ".json", ".xml"):
+                text = content.decode("utf-8", errors="replace")
+            else:
+                return {"text_error": f"extração de texto não suportada para {mime}"}
+        except Exception as e:
+            return {"text_error": f"falha ao extrair texto: {e}"}
+
+        text = re.sub(r"[ \t]+", " ", text or "").strip()
+        out: dict[str, Any] = {}
+        if pages:
+            out["pages"] = pages
+        if not text:
+            out["text_error"] = "nenhum texto extraível (PDF escaneado? use OCR)"
+            return out
+        if max_chars and len(text) > max_chars:
+            out["text"] = text[:max_chars].rstrip() + "…"
+            out["text_truncated"] = True
+        else:
+            out["text"] = text
+        return out
+
+    def send_media_base64(
+        self,
+        number: str,
+        base64_data: str,
+        media_type: str,
+        file_name: str | None = None,
+        caption: str | None = None,
+        mimetype: str | None = None,
+    ) -> dict[str, Any]:
+        """Envia mídia a partir de conteúdo base64 (sem URL pública).
+
+        Endpoint: POST /message/sendMedia/{instanceId}
+                  POST /message/sendWhatsAppAudio/{instanceId} (áudio)
+        """
+        clean_number = self.resolve_send_target(number)
+        self.validate_media_type(media_type)
+        if not base64_data or not isinstance(base64_data, str):
+            raise ValueError("base64_data não pode ser vazio")
+        if base64_data.startswith("data:"):
+            base64_data = base64_data.split(",", 1)[-1]
+        if caption:
+            self.validate_text_length(caption, MAX_CAPTION_LENGTH, "caption")
+
+        self._log(f"Enviando {media_type} (base64, {len(base64_data)} chars) para {clean_number}")
+
+        if media_type == "audio":
+            return self._make_request(
+                "POST", "/message/sendWhatsAppAudio/{instanceId}",
+                data={"number": clean_number, "audio": base64_data},
+            )
+
+        payload: dict[str, Any] = {
+            "number": clean_number,
+            "mediatype": media_type,
+            "media": base64_data,
+        }
+        if mimetype:
+            payload["mimetype"] = mimetype
+        if caption:
+            payload["caption"] = caption
+        if file_name:
+            payload["fileName"] = file_name
+        elif media_type == "document":
+            payload["fileName"] = "documento"
+        return self._make_request("POST", "/message/sendMedia/{instanceId}", data=payload)
+
+    def send_file(
+        self,
+        number: str,
+        file_path: str,
+        caption: str | None = None,
+        media_type: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Envia um arquivo local. O base64 é gerado aqui, sem passar pelo LLM.
+
+        Args:
+            number: Número de destino
+            file_path: Caminho do arquivo no disco
+            caption: Legenda opcional
+            media_type: image/video/audio/document (padrão: deduzido da extensão;
+                        qualquer extensão desconhecida vira document)
+            file_name: Nome exibido no WhatsApp (padrão: nome do arquivo)
+        """
+        path = Path(os.path.expandvars(file_path)).expanduser()
+        if not path.is_file():
+            raise ValueError(f"Arquivo não encontrado: {file_path}")
+        content = path.read_bytes()
+        if not content:
+            raise ValueError(f"Arquivo vazio: {file_path}")
+        media_type = media_type or _EXT_MEDIA_TYPE.get(path.suffix.lower(), "document")
+        mime = mimetypes.guess_type(path.name)[0]
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(content).decode("ascii"),
+            media_type=media_type,
+            file_name=file_name or path.name,
+            caption=caption,
+            mimetype=mime,
+        )
+        if isinstance(result, dict):
+            result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
+        return result
+
+    # =========================================================================
+    # TRANSCRIÇÃO DE ÁUDIOS
+    # =========================================================================
+
+    def _transcript_cache_path(self, message_id: str) -> Path:
+        return self.media_dir / ".transcripts" / f"{self._safe_filename(message_id)}.json"
+
+    def _cached_audio_path(self, message_id: str) -> Path | None:
+        """Procura um áudio já baixado para esta mensagem, evitando novo download."""
+        if not self.media_dir.is_dir():
+            return None
+        safe = self._safe_filename(message_id)
+        for candidate in sorted(self.media_dir.glob(f"{safe}.*")):
+            if candidate.is_file() and is_transcribable(None, candidate):
+                return candidate
+        return None
+
+    def transcribe_message(
+        self,
+        message_id: str,
+        language: str | None = None,
+        max_chars: int = 4000,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Baixa (se preciso) e transcreve o áudio de uma mensagem.
+
+        O resultado é gravado em `<media_dir>/.transcripts/<id>.json` e reusado
+        nas próximas chamadas, então repetir a pergunta não paga transcrição de novo.
+
+        Args:
+            message_id: id da mensagem de áudio (campo `id` das mensagens compactas)
+            language: código ISO do idioma (ex: 'pt'); padrão: configuração/detecção
+            max_chars: corte do texto devolvido (0 = sem corte)
+            force: True refaz a transcrição ignorando o cache
+
+        Returns:
+            dict: {text, backend, model, language?, seconds?, path, cached?, truncated?}
+
+        Raises:
+            TranscriptionError: Sem backend configurado ou falha ao transcrever
+            EvolutionAPIError: Falha ao baixar a mídia
+        """
+        if not message_id or not isinstance(message_id, str):
+            raise ValueError("message_id não pode ser vazio")
+
+        cache_path = self._transcript_cache_path(message_id)
+        result: dict[str, Any] | None = None
+
+        if not force and cache_path.is_file():
+            try:
+                result = json.loads(cache_path.read_text(encoding="utf-8"))
+                result["cached"] = True
+                self._log(f"Transcrição em cache para {message_id}")
+            except (ValueError, OSError):
+                result = None
+
+        if result is None:
+            path = self._cached_audio_path(message_id)
+            if path is None:
+                downloaded = self.download_media(message_id, filename=message_id)
+                path = Path(downloaded["path"])
+                if not is_transcribable(downloaded.get("mime"), path):
+                    raise TranscriptionError(
+                        f"A mensagem {message_id} não é áudio nem vídeo "
+                        f"(mime: {downloaded.get('mime')})."
+                    )
+            result = self.transcriber.transcribe(path, language)
+            result["path"] = str(path)
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+            except OSError as e:
+                self._log(f"Não foi possível gravar o cache de transcrição: {e}", "WARNING")
+
+        text, cut = truncate(result.get("text") or "", max_chars)
+        out = dict(result)
+        out["text"] = text
+        if cut:
+            out["truncated"] = True
+        if not text:
+            out["warning"] = "nenhuma fala reconhecida no áudio"
+        return out
+
+    def transcribe_file(
+        self,
+        file_path: str,
+        language: str | None = None,
+        max_chars: int = 4000,
+    ) -> dict[str, Any]:
+        """Transcreve um arquivo de áudio/vídeo que já está no disco."""
+        path = Path(os.path.expandvars(file_path)).expanduser()
+        if not path.is_file():
+            raise ValueError(f"Arquivo não encontrado: {file_path}")
+        result = self.transcriber.transcribe(path, language)
+        result["path"] = str(path)
+        text, cut = truncate(result.get("text") or "", max_chars)
+        result["text"] = text
+        if cut:
+            result["truncated"] = True
+        return result
 
     # =========================================================================
     # INSTANCE OPERATIONS
@@ -643,8 +1137,7 @@ class EvolutionClient:
         }
 
         if number:
-            clean_number = self.validate_phone_number(number)
-            payload["number"] = clean_number
+            payload["number"] = self.resolve_send_target(number)
 
         return self._make_request(
             "POST",
@@ -666,8 +1159,12 @@ class EvolutionClient:
         # Usa get_connection_state que retorna info da instância
         response = self.get_connection_state()
 
+        # A v2 aninha o estado em {"instance": {"state": ...}}; a v1 devolve no topo
+        inner = response.get("instance") if isinstance(response, dict) else None
+        state = (inner or {}).get("state") if isinstance(inner, dict) else None
+
         return {
             "instance_name": self.instance_id,
-            "status": response.get("state", "unknown"),
+            "status": state or response.get("state", "unknown"),
             "info": response
         }

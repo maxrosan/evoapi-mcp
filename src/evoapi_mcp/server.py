@@ -1,7 +1,14 @@
-"""MCP Server para Evolution API."""
+"""MCP Server para Evolution API.
+
+Todas as tools devolvem JSON compacto (sem espaços, acentos sem escape, campos
+nulos omitidos) e, por padrão, versões resumidas dos objetos da Evolution API.
+Isso reduz em ~10x os tokens consumidos pelo LLM em cada chamada. Passe
+`full=True` nas tools de leitura quando precisar do objeto bruto.
+"""
 
 import sys
 from pathlib import Path
+from typing import Any
 
 # Adiciona o diretório src ao path para permitir importações
 src_dir = Path(__file__).parent.parent
@@ -11,6 +18,13 @@ if str(src_dir) not in sys.path:
 from mcp.server.fastmcp import FastMCP
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
+from evoapi_mcp.transcription import TranscriptionError
+from evoapi_mcp.formatters import (
+    compact_chat,
+    compact_contact,
+    compact_send_result,
+    dumps,
+)
 
 # Inicializa o MCP server
 mcp = FastMCP("Evolution API")
@@ -24,68 +38,44 @@ except Exception as e:
     sys.exit(1)
 
 
+def _out(obj: Any) -> str:
+    """Serializa a resposta de forma compacta (uma única string JSON)."""
+    return dumps(obj)
+
+
+def _limit(value: int | None) -> int:
+    return value if value and value > 0 else config.default_limit
+
+
+def _max_text(value: int | None) -> int | None:
+    if value is None:
+        value = config.max_text_chars
+    return value if value > 0 else None
+
+
 # ============================================================================
 # TOOLS - Envio de Mensagens
 # ============================================================================
 
 @mcp.tool()
-def send_text_message(
-    number: str,
-    text: str,
-    link_preview: bool = True
-) -> dict:
-    """Envia uma mensagem de texto para um número WhatsApp.
+def send_text_message(number: str, text: str, link_preview: bool = True) -> str:
+    """Envia texto para um número WhatsApp.
 
     Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        text: Texto da mensagem a ser enviada
-        link_preview: Se deve mostrar preview de links (padrão: True)
-
-    Returns:
-        dict: Resposta da API com informações sobre a mensagem enviada
-
-    Example:
-        send_text_message(
-            number="5511999999999",
-            text="Olá! Esta é uma mensagem de teste."
-        )
+        number: internacional sem '+' (ex: 5511999999999)
+        text: conteúdo da mensagem
+        link_preview: mostrar preview de links
+    Returns: {ok, id, to, ts, status}
     """
-    return client.send_text(
-        number=number,
-        text=text,
-        link_preview=link_preview
-    )
+    return _out(compact_send_result(client.send_text(number=number, text=text, link_preview=link_preview)))
 
 
 @mcp.tool()
-def send_image(
-    number: str,
-    image_url: str,
-    caption: str | None = None
-) -> dict:
-    """Envia uma imagem para um número WhatsApp.
-
-    Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        image_url: URL pública da imagem (jpg, png, etc.)
-        caption: Legenda da imagem (opcional)
-
-    Returns:
-        dict: Resposta da API
-
-    Example:
-        send_image(
-            number="5511999999999",
-            image_url="https://example.com/image.jpg",
-            caption="Confira esta imagem!"
-        )
-    """
-    return client.send_media(
-        number=number,
-        media_url=image_url,
-        media_type="image",
-        caption=caption
-    )
+def send_image(number: str, image_url: str, caption: str | None = None) -> str:
+    """Envia imagem a partir de URL pública. Para arquivo local use send_file."""
+    return _out(compact_send_result(
+        client.send_media(number=number, media_url=image_url, media_type="image", caption=caption)
+    ))
 
 
 @mcp.tool()
@@ -93,277 +83,265 @@ def send_document(
     number: str,
     document_url: str,
     filename: str | None = None,
-    caption: str | None = None
-) -> dict:
-    """Envia um documento para um número WhatsApp.
-
-    Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        document_url: URL pública do documento (pdf, docx, xlsx, etc.)
-        filename: Nome do arquivo a ser exibido (opcional)
-        caption: Legenda do documento (opcional)
-
-    Returns:
-        dict: Resposta da API
-
-    Example:
-        send_document(
-            number="5511999999999",
-            document_url="https://example.com/relatorio.pdf",
-            filename="Relatório Mensal.pdf",
-            caption="Segue o relatório solicitado"
-        )
-    """
-    return client.send_media(
-        number=number,
-        media_url=document_url,
-        media_type="document",
-        caption=caption,
-        filename=filename
-    )
+    caption: str | None = None,
+) -> str:
+    """Envia documento (pdf, docx, xlsx...) a partir de URL pública. Para arquivo local use send_file."""
+    return _out(compact_send_result(client.send_media(
+        number=number, media_url=document_url, media_type="document", caption=caption, filename=filename
+    )))
 
 
 @mcp.tool()
-def send_video(
-    number: str,
-    video_url: str,
-    caption: str | None = None
-) -> dict:
-    """Envia um vídeo para um número WhatsApp.
-
-    Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        video_url: URL pública do vídeo (mp4, etc.)
-        caption: Legenda do vídeo (opcional)
-
-    Returns:
-        dict: Resposta da API
-
-    Example:
-        send_video(
-            number="5511999999999",
-            video_url="https://example.com/video.mp4",
-            caption="Veja este vídeo"
-        )
-    """
-    return client.send_media(
-        number=number,
-        media_url=video_url,
-        media_type="video",
-        caption=caption
-    )
+def send_video(number: str, video_url: str, caption: str | None = None) -> str:
+    """Envia vídeo a partir de URL pública. Para arquivo local use send_file."""
+    return _out(compact_send_result(
+        client.send_media(number=number, media_url=video_url, media_type="video", caption=caption)
+    ))
 
 
 @mcp.tool()
-def send_audio(
+def send_audio(number: str, audio_url: str) -> str:
+    """Envia áudio a partir de URL pública. Para arquivo local use send_file."""
+    return _out(compact_send_result(client.send_media(number=number, media_url=audio_url, media_type="audio")))
+
+
+@mcp.tool()
+def send_file(
     number: str,
-    audio_url: str
-) -> dict:
-    """Envia um áudio para um número WhatsApp.
+    file_path: str,
+    caption: str | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> str:
+    """Envia um arquivo do disco (imagem, vídeo, áudio ou documento) sem passar base64 pelo chat.
+
+    Preferir esta tool a send_*_base64: o servidor lê e codifica o arquivo.
 
     Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        audio_url: URL pública do áudio (mp3, ogg, etc.)
-
-    Returns:
-        dict: Resposta da API
-
-    Example:
-        send_audio(
-            number="5511999999999",
-            audio_url="https://example.com/audio.mp3"
-        )
+        number: internacional sem '+'
+        file_path: caminho do arquivo local (ex: o `path` retornado por download_media)
+        caption: legenda opcional
+        media_type: image|video|audio|document (padrão: deduzido pela extensão)
+        file_name: nome exibido no WhatsApp (padrão: nome do arquivo)
     """
-    return client.send_media(
-        number=number,
-        media_url=audio_url,
-        media_type="audio"
+    result = client.send_file(
+        number=number, file_path=file_path, caption=caption, media_type=media_type, file_name=file_name
     )
+    out = compact_send_result(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
+def send_document_base64(
+    number: str,
+    base64_data: str,
+    file_name: str,
+    caption: str = "",
+    mimetype: str = "application/pdf",
+) -> str:
+    """Envia documento a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
+    return _out(compact_send_result(client.send_media_base64(
+        number=number, base64_data=base64_data, media_type="document",
+        file_name=file_name, caption=caption or None, mimetype=mimetype,
+    )))
+
+
+@mcp.tool()
+def send_image_base64(
+    number: str,
+    base64_data: str,
+    caption: str = "",
+    file_name: str = "image.png",
+    mimetype: str = "image/png",
+) -> str:
+    """Envia imagem a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
+    return _out(compact_send_result(client.send_media_base64(
+        number=number, base64_data=base64_data, media_type="image",
+        file_name=file_name, caption=caption or None, mimetype=mimetype,
+    )))
 
 
 # ============================================================================
-# TOOLS - Gerenciamento de Chats e Mensagens
+# TOOLS - Chats e Mensagens
 # ============================================================================
 
 @mcp.tool()
 def get_chat_messages(
     number: str,
-    limit: int = 50
-) -> dict:
-    """Obtém mensagens de uma conversa específica por número de telefone.
+    limit: int | None = None,
+    page: int = 1,
+    query: str | None = None,
+    max_text: int | None = None,
+    full: bool = False,
+) -> str:
+    """Mensagens de uma conversa (mais recentes primeiro), em formato compacto.
 
-    Use esta ferramenta quando o usuário pedir:
-    - "mostre as mensagens do número X"
-    - "últimas 20 mensagens de fulano"
-    - "conversa com 5511999999999"
-
-    Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-        limit: Número máximo de mensagens a retornar. SEMPRE ajuste este valor
-               quando o usuário especificar quantidade (ex: "últimas 20", "50 mensagens")
-               Padrão: 50 mensagens
-
-    Returns:
-        dict: Lista de mensagens da conversa
-
-    Example:
-        # Últimas 50 mensagens (padrão)
-        messages = get_chat_messages(number="5511999999999")
-
-        # Últimas 20 mensagens
-        messages = get_chat_messages(number="5511999999999", limit=20)
-    """
-    return client.get_messages_by_number(number=number, limit=limit)
-
-
-@mcp.tool()
-def list_chats(limit: int | None = None) -> list:
-    """Lista conversas ativas do WhatsApp ordenadas por data de atualização.
-
-    Use esta ferramenta quando o usuário pedir:
-    - "liste minhas conversas"
-    - "mostre minhas conversas mais recentes"
-    - "quais são meus últimos chats"
+    Cada mensagem: {id, ts, from ('me' ou número), name, type, text, file, mime, size, reply_to}.
+    Use o `id` em download_media para baixar anexos.
 
     Args:
-        limit: Número máximo de conversas a retornar. SEMPRE use este parâmetro
-               quando o usuário especificar uma quantidade (ex: "5 conversas", "10 chats")
-
-    Returns:
-        list: Lista de conversas, cada uma com:
-              - remoteJid: ID do chat
-              - pushName: Nome do contato (ou null)
-              - lastMessage: Última mensagem trocada
-              - unreadCount: Número de mensagens não lidas
-
-    Example:
-        # Listar todas as conversas
-        chats = list_chats()
-
-        # Listar apenas as 10 mais recentes (IMPORTANTE: sempre passar limit quando especificado)
-        chats = list_chats(limit=10)
+        number: internacional sem '+'
+        limit: quantidade (padrão: EVOLUTION_DEFAULT_LIMIT=20). Ajuste quando o usuário pedir N mensagens
+        page: página, 1 = mais recentes
+        query: filtra localmente por texto/legenda/nome de arquivo (case-insensitive)
+        max_text: corte do texto por mensagem (0 = sem corte; padrão: 500)
+        full: True devolve os registros brutos da API (muito mais tokens)
     """
-    chats = client.find_chats()
-
-    # Aplica limit se fornecido
-    if limit is not None and isinstance(chats, list):
-        chats = chats[:limit]
-
-    return chats
+    return _out(client.get_messages_by_number(
+        number=number, limit=_limit(limit), page=page, query=query,
+        max_text=_max_text(max_text), compact=not full,
+    ))
 
 
 @mcp.tool()
 def find_messages(
     query: str | None = None,
     chat_id: str | None = None,
-    limit: int = 50
-) -> dict:
-    """Busca mensagens com filtros avançados em todas as conversas.
-
-    Use esta ferramenta quando o usuário pedir:
-    - "busque mensagens com a palavra X"
-    - "encontre mensagens sobre pedido"
-    - "mensagens que contenham reunião"
+    limit: int | None = None,
+    page: int = 1,
+    max_text: int | None = None,
+    full: bool = False,
+) -> str:
+    """Busca mensagens em todas as conversas (ou em chat_id), formato compacto.
 
     Args:
-        query: Termo de busca nas mensagens. Use quando o usuário pedir para
-               buscar/encontrar mensagens com palavras específicas
-        chat_id: ID do chat específico no formato WhatsApp (ex: 5511999999999@s.whatsapp.net)
-                 Raramente usado - prefira usar number com get_chat_messages()
-        limit: Número máximo de mensagens a retornar. SEMPRE ajuste quando
-               o usuário especificar quantidade
-               Padrão: 50 mensagens
-
-    Returns:
-        dict: Lista de mensagens encontradas
-
-    Example:
-        # Buscar por termo em todas as conversas
-        messages = find_messages(query="pedido")
-
-        # Buscar apenas 10 mensagens com "reunião"
-        messages = find_messages(query="reunião", limit=10)
-
-        # Buscar em chat específico
-        messages = find_messages(chat_id="5511999999999@s.whatsapp.net", limit=20)
+        query: termo buscado em texto/legenda/nome de arquivo; a varredura é local, até 500 mensagens
+        chat_id: jid do chat (ex: 5511999999999@s.whatsapp.net ou grupo ...@g.us)
+        limit: máximo de resultados (padrão: 20)
+        page: página quando não há query
+        max_text: corte do texto por mensagem (0 = sem corte)
+        full: True devolve registros brutos (muito mais tokens)
     """
-    return client.find_messages(query=query, chat_id=chat_id, limit=limit)
+    return _out(client.find_messages(
+        query=query, chat_id=chat_id, limit=_limit(limit), page=page,
+        max_text=_max_text(max_text), compact=not full,
+    ))
+
+
+@mcp.tool()
+def list_chats(limit: int | None = None, full: bool = False) -> str:
+    """Conversas recentes: [{jid, number, name, group, unread, last_ts, last_from, last}].
+
+    Args:
+        limit: quantidade (padrão: 20). Ajuste quando o usuário pedir N conversas
+        full: True devolve objetos brutos (muito mais tokens)
+    """
+    chats = client.find_chats()
+    if not isinstance(chats, list):
+        return _out(chats)
+    chats = chats[: _limit(limit)]
+    if full:
+        return _out(chats)
+    return _out([compact_chat(c) for c in chats])
 
 
 @mcp.tool()
 def get_contacts(
     contact_id: str | None = None,
-    limit: int | None = None
-) -> list:
-    """Busca contatos salvos no WhatsApp com filtros opcionais.
-
-    Use esta ferramenta quando o usuário pedir:
-    - "liste meus contatos"
-    - "mostre 10 contatos"
-    - "quais são meus contatos salvos"
-    - "busque o contato 5511999999999"
-    - "mostre informações do contato X"
+    limit: int | None = None,
+    search: str | None = None,
+    full: bool = False,
+) -> str:
+    """Contatos salvos: [{jid, number, name, group}].
 
     Args:
-        contact_id: ID específico do contato (ex: 5511999999999@s.whatsapp.net).
-                   Use quando buscar um contato específico.
-                   Se None, retorna todos os contatos.
-
-        limit: Número máximo de contatos a retornar. SEMPRE use este parâmetro
-               quando o usuário especificar uma quantidade (ex: "10 contatos", "5 primeiros")
-               Se não especificado, retorna TODOS os contatos (pode ser muitos!)
-
-    Returns:
-        list: Lista de contatos onde cada contato tem:
-              - remoteJid: ID do contato (ex: 5511999999999@s.whatsapp.net)
-              - pushName: Nome do contato
-              - isGroup: Se é grupo ou contato individual
-              - profilePicUrl: URL da foto de perfil
-
-    Example:
-        # Buscar todos os contatos (pode retornar centenas!)
-        contacts = get_contacts()
-
-        # Buscar apenas os primeiros 10 contatos (RECOMENDADO quando há quantidade)
-        contacts = get_contacts(limit=10)
-
-        # Buscar contato específico
-        contact = get_contacts(contact_id="5511999999999@s.whatsapp.net")
-
-        # Buscar contato específico (apenas 1 resultado)
-        contact = get_contacts(contact_id="5511999999999@s.whatsapp.net", limit=1)
+        contact_id: jid exato (ex: 5511999999999@s.whatsapp.net)
+        limit: quantidade (padrão: 20)
+        search: filtra por trecho do nome ou do número (case-insensitive)
+        full: True devolve objetos brutos, com URL de foto etc. (muito mais tokens)
     """
     contacts = client.fetch_contacts(contact_id=contact_id)
-
-    # Aplica limit se fornecido
-    if limit is not None and isinstance(contacts, list):
-        contacts = contacts[:limit]
-
-    return contacts
+    if search:
+        s = search.casefold()
+        contacts = [
+            c for c in contacts
+            if s in str(c.get("pushName") or "").casefold() or s in str(c.get("remoteJid") or "")
+        ]
+    total = len(contacts)
+    contacts = contacts[: _limit(limit)]
+    items = contacts if full else [compact_contact(c) for c in contacts]
+    return _out({"total": total, "count": len(items), "contacts": items})
 
 
 @mcp.tool()
-def get_contact_name_by_number(number: str) -> dict:
-    """Obtém o nome de um contato pelo número de telefone.
+def get_contact_name_by_number(number: str) -> str:
+    """Nome salvo de um contato pelo número. Returns: {number, name|null}"""
+    return _out({"number": number, "name": client.get_contact_name(number)})
+
+
+# ============================================================================
+# TOOLS - Mídia
+# ============================================================================
+
+@mcp.tool()
+def download_media(
+    message_id: str,
+    save_dir: str | None = None,
+    filename: str | None = None,
+    extract_text: bool = False,
+    max_chars: int = 3000,
+) -> str:
+    """Baixa o anexo de uma mensagem para o disco e devolve só caminho e metadados (sem base64).
 
     Args:
-        number: Número no formato internacional sem '+' (ex: 5511999999999)
-
-    Returns:
-        dict: {"number": "5511999999999", "name": "Nome do Contato" ou None}
-
-    Example:
-        info = get_contact_name_by_number("5511999999999")
-        if info['name']:
-            print(f"Contato: {info['name']}")
-        else:
-            print(f"Número não salvo: {info['number']}")
+        message_id: campo `id` da mensagem (get_chat_messages/find_messages)
+        save_dir: pasta destino (padrão: EVOLUTION_MEDIA_DIR)
+        filename: nome do arquivo (padrão: nome original)
+        extract_text: True extrai texto de PDF/txt, ou transcreve quando o anexo é áudio/vídeo
+        max_chars: limite do texto extraído
+    Returns: {path, file, mime, size, type, pages?, text?, text_truncated?, text_error?}
     """
-    name = client.get_contact_name(number)
-    return {
-        "number": number,
-        "name": name
-    }
+    return _out(client.download_media(
+        message_id=message_id, save_dir=save_dir, filename=filename,
+        extract_text=extract_text, max_chars=max_chars,
+    ))
+
+
+@mcp.tool()
+def transcribe_audio(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    language: str | None = None,
+    max_chars: int = 4000,
+    force: bool = False,
+) -> str:
+    """Transcreve em texto um áudio do WhatsApp (voice note) ou um arquivo local.
+
+    Use quando o usuário pedir o conteúdo de um áudio: "o que ele falou no áudio",
+    "transcreva o áudio", "resuma os áudios de hoje". Mensagens de áudio aparecem
+    em get_chat_messages/find_messages com type "audio" (voice=true para voice note).
+    O áudio é baixado e transcrito no servidor; só o texto volta. O resultado fica
+    em cache por message_id.
+
+    Args:
+        message_id: id da mensagem de áudio (informe este OU file_path)
+        file_path: caminho de um áudio/vídeo já no disco
+        language: idioma, ex: 'pt' (padrão: configuração ou detecção automática)
+        max_chars: corte do texto devolvido (0 = sem corte)
+        force: refaz a transcrição ignorando o cache
+    Returns: {text, backend, model, language, seconds, path, cached}
+    """
+    if bool(message_id) == bool(file_path):
+        raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
+    try:
+        if message_id:
+            return _out(client.transcribe_message(
+                message_id=message_id, language=language, max_chars=max_chars, force=force
+            ))
+        return _out(client.transcribe_file(file_path=file_path, language=language, max_chars=max_chars))
+    except TranscriptionError as e:
+        return _out({"error": str(e), "transcription": client.transcriber.describe()})
+
+
+@mcp.tool()
+def get_media_base64(message_id: str) -> str:
+    """Devolve o anexo em base64. EVITE: custa dezenas de milhares de tokens; use download_media."""
+    data = client.get_media(message_id)
+    if isinstance(data, dict):
+        data.pop("buffer", None)
+    return _out(data)
 
 
 # ============================================================================
@@ -371,68 +349,50 @@ def get_contact_name_by_number(number: str) -> dict:
 # ============================================================================
 
 @mcp.tool()
-def get_connection_status() -> dict:
-    """Verifica o status da conexão da instância WhatsApp.
-
-    Returns:
-        dict: Estado da conexão contendo informações sobre a instância
-
-    Example:
-        status = get_connection_status()
-        if status.get('state') == 'open':
-            print("WhatsApp conectado!")
-    """
-    return client.get_connection_state()
+def get_connection_status() -> str:
+    """Estado da conexão da instância. Returns: {instance, state}"""
+    response = client.get_connection_state()
+    inst = response.get("instance", response) if isinstance(response, dict) else {}
+    return _out({
+        "instance": client.instance_id,
+        "state": (inst.get("state") if isinstance(inst, dict) else None) or response.get("state", "unknown"),
+    })
 
 
 @mcp.tool()
-def set_presence(
-    status: str,
-    number: str | None = None
-) -> dict:
-    """Define o status de presença da instância WhatsApp.
-
-    Args:
-        status: Status de presença (available, unavailable, composing, recording)
-        number: Número para enviar presença específica (opcional)
-
-    Returns:
-        dict: Confirmação da alteração de presença
-
-    Example:
-        set_presence("available")  # Fica online
-        set_presence("unavailable")  # Fica offline
-    """
+def set_presence(status: str, number: str | None = None) -> str:
+    """Define presença: available | unavailable | composing | recording."""
     valid_statuses = ["available", "unavailable", "composing", "recording"]
-
     if status not in valid_statuses:
-        raise ValueError(
-            f"Status inválido: '{status}'. "
-            f"Valores válidos: {', '.join(valid_statuses)}"
-        )
-
-    return client.set_presence(status=status, number=number)
+        raise ValueError(f"Status inválido: '{status}'. Válidos: {', '.join(valid_statuses)}")
+    return _out(client.set_presence(status=status, number=number))
 
 
 @mcp.tool()
-def get_instance_info() -> dict:
-    """Obtém informações detalhadas da instância WhatsApp.
+def get_instance_info(full: bool = False) -> str:
+    """Informações da instância. full=True inclui a resposta bruta da API."""
+    info = client.get_instance_info()
+    if not full:
+        info.pop("info", None)
+    info["transcription"] = client.transcriber.describe()
+    return _out(info)
 
-    Returns:
-        dict: Informações completas da instância incluindo status e configuração
 
-    Example:
-        info = get_instance_info()
-        print(f"Instância: {info['instance_name']}")
-        print(f"Status: {info['status']}")
-    """
-    return client.get_instance_info()
+@mcp.tool()
+def clear_cache() -> str:
+    """Limpa o cache de nomes de contatos (força atualização na próxima consulta)."""
+    client.clear_cache()
+    return _out({"ok": True})
 
 
 # ============================================================================
 # Entry Point
 # ============================================================================
 
-if __name__ == "__main__":
-    # Executa o servidor MCP
+def main() -> None:
+    """Executa o servidor MCP em stdio (Claude Desktop / Claude Code)."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
