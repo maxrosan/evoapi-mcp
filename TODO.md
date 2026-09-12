@@ -38,6 +38,8 @@ foi feito mora no `CHANGELOG.md`, e como usar mora no `README.md`.
   (chats, contatos, presença) nunca foram testados.
 - [ ] `ruff` no CI, junto do pytest.
 - [ ] Paginação real em `list_chats` e `get_contacts` (hoje é corte por `limit`).
+- [ ] O README não documenta o bot "IA:" — quem lê só o README não sabe que ele
+  existe, nem como ligar. Hoje isso só está no `CHANGELOG.md` e no `.env.example`.
 - [ ] Os links de clone, issues e discussões no README ainda apontam para o
   repositório de origem (`PabloBispo/evoapi-mcp`). Decidir se ficam como atribuição
   ou passam para este fork.

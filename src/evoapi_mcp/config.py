@@ -15,6 +15,7 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_TIMEOUT: (Opcional) Timeout para requisições em segundos (padrão: 30)
     - EVOLUTION_MEDIA_DIR: (Opcional) Pasta onde mídias baixadas são salvas
     - EVOLUTION_MEDIA_TTL_DAYS: (Opcional) Idade máxima dos arquivos dessa pasta, em dias
+    - EVOLUTION_BASE64_TOOLS: (Opcional) 1 reexpõe as tools de base64, desligadas por padrão
       (padrão: ~/.evoapi-mcp/media)
     - EVOLUTION_DEFAULT_LIMIT: (Opcional) Quantidade padrão de itens em listagens (padrão: 20)
     - EVOLUTION_MAX_TEXT_CHARS: (Opcional) Corte de texto por mensagem no modo compacto (padrão: 500)
@@ -137,6 +138,10 @@ class EvolutionConfig(BaseSettings):
     drive_refresh_token: str = Field(default="", description="Refresh token OAuth do Google")
     drive_root: str = Field(default="", description="Pasta base no Drive, ex: FINANCEIRO")
     drive_root_id: str = Field(default="", description="Id da pasta base (criada pelo próprio app)")
+    base64_tools: bool = Field(
+        default=False,
+        description="Expõe as tools de base64 (send_*_base64, get_media_base64). Caras: use só por compatibilidade"
+    )
     owner_number: str = Field(
         default="",
         description="Número do dono da instância; identifica a conversa dele com ele mesmo"

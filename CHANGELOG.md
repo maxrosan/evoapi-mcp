@@ -74,6 +74,32 @@ custando o arquivo inteiro dentro da conversa. Duas rotas novas fecham isso.
   foi trocado por placeholder. **Ele continua no histórico do git e válido até ser rotacionado
   no painel da Evolution** — está registrado no `TODO.md`
 
+### 🧭 Interação: qual tool usar, e o WhatsApp deixando de ficar mudo
+
+- **`instructions` no servidor MCP.** São cinco caminhos para mandar uma imagem, e a
+  regra de escolha estava espalhada pelas descrições ("para X use Y") — regra repetida
+  em cinco lugares funciona enquanto o modelo lê as cinco, e falha calada quando ele
+  escolhe a primeira que serve. Agora ela é dita uma vez, no nível do servidor, e chega
+  antes da escolha
+- **Tools de base64 escondidas por padrão** (`send_image_base64`, `send_document_base64`,
+  `get_media_base64`): tool visível é tool escolhida, e essas são justamente o caminho
+  caro que o resto do projeto existe para evitar. `EVOLUTION_BASE64_TOOLS=1` traz de volta.
+  A superfície cai de 28 para 25 tools
+- **`react_to_message(number, message_id, emoji, from_me?)`**: responder com um sinal em
+  vez de mais uma mensagem. String vazia remove a reação
+- **Sinal de vida do bot "IA:"**: ao ser acionado ele reage com 👀 e liga o "digitando…";
+  ao responder, troca por ✅. Antes disso a conversa ficava parada por dezenas de segundos,
+  sem distinguir "pensando" de "morreu". Falha ao sinalizar nunca impede a resposta.
+  `EVOLUTION_BOT_FEEDBACK=0` desliga
+
+### 🐛 Corrigido
+
+- **Reação nunca mais aciona o bot.** O texto de uma reação é o próprio emoji e, na
+  conversa pessoal, toda mensagem do dono é instrução: um 👍 de Max virava a instrução
+  "👍", e o 👀 do próprio bot teria voltado como novo acionamento. Duas travas: o tipo
+  reação nunca vira instrução (`webhook.summarize_event`) e o id da reação entra na lista
+  de enviados, como o de qualquer envio
+
 ### 📚 Documentação
 
 - `ROADMAP.md`, `KNOWN_ISSUES.md`, `NEXT_STEPS.md`, `SUMMARY.md` e `FIXES.md` foram removidos:

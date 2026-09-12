@@ -112,7 +112,14 @@ def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, 
     #  - na conversa dele com ele mesmo, tudo o que ele escreve é instrução;
     #  - nas demais, só o que começa com "IA:".
     # Um terceiro escrevendo "IA:" num grupo continua não comandando nada.
-    instrucao = instruction_of(texto, self_chat=propria) if minha else None
+    # Reação NUNCA aciona. O texto de uma reação é o próprio emoji, e na conversa
+    # pessoal toda mensagem do dono é instrução: sem esta linha, um 👍 do Max viraria
+    # a instrução "👍", e o 👀 que o próprio bot usa para dizer "estou fazendo"
+    # voltaria como um novo acionamento.
+    tipo = compacta.get("type") or dados.get("messageType")
+    e_reacao = tipo in ("reaction", "reactionMessage")
+
+    instrucao = instruction_of(texto, self_chat=propria) if minha and not e_reacao else None
     aciona = bool(minha) and bool(instrucao) and (propria or is_trigger(texto))
 
     resumo.update({
@@ -122,7 +129,7 @@ def summarize_event(payload: Any, owner_number: str | None = None) -> dict[str, 
         "chat_jid": jid,
         "chat_type": ("grupo" if str(jid).endswith("@g.us") else "direto") if jid else None,
         "self_chat": True if propria else None,
-        "type": compacta.get("type") or dados.get("messageType"),
+        "type": tipo,
         "preview": (texto[:PREVIEW_CHARS] + "…") if texto and len(texto) > PREVIEW_CHARS else texto,
         "instruction": instrucao if aciona else None,
         "trigger": True if aciona else None,

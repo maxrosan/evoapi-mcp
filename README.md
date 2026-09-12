@@ -56,6 +56,8 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
 - ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
 - ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
+- ✅ Tools de base64 escondidas por padrão: o caminho caro não fica à mão sem querer
+- ✅ A regra de "qual tool usar" viaja no próprio servidor (instructions do MCP)
 - ✅ Extração de texto de PDF/txt (`extract_text=True`) para identificar documentos sem abri-los
 - ✅ Busca textual local em `find_messages`/`get_chat_messages` (só as mensagens que casam voltam)
 - ✅ Limites padrão menores (20 itens) e corte de texto configurável
@@ -196,6 +198,31 @@ Evolution não enxerga.
 Por segurança, o download só sai para endereço público: `http`/`https`, e todo salto de
 redirecionamento é conferido, para que o servidor não sirva de ponte para a rede interna
 a partir de um link que chegou pelo WhatsApp.
+
+### Qual tool usar, e por que isso mora no servidor
+
+São cinco caminhos para mandar uma imagem. Qual usar não depende de o modelo ler as
+cinco descrições e comparar: a regra chega junto com o servidor, nas `instructions`
+do MCP (`server.py`), ditas uma vez:
+
+| origem do arquivo | tool |
+|---|---|
+| você vai desenhar | `send_render` (SVG) |
+| já está na web | `send_url`, ou `send_image` se a URL for direta |
+| já está no disco do servidor | `send_file` |
+| foi arquivado no Drive por aqui | `send_drive_file` |
+| é texto | `send_text_message` |
+
+As três tools de base64 (`send_image_base64`, `send_document_base64`,
+`get_media_base64`) ficam **escondidas por padrão**. Elas existem por paridade com o
+conector antigo, mas tool visível é tool escolhida: estando na lista, mais cedo ou
+mais tarde um PNG inteiro sai em base64 e queima cem mil tokens fazendo o que
+`send_file` faz de graça. Esconder funciona melhor que avisar na descrição — o aviso
+concorre com a conveniência, a ausência não. Para trazê-las de volta:
+
+```bash
+EVOLUTION_BASE64_TOOLS=1
+```
 
 ### Reenviar o que já foi arquivado no Drive
 

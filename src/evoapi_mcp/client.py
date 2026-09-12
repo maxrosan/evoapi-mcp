@@ -1067,6 +1067,38 @@ class EvolutionClient:
             result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
         return result
 
+    def send_reaction(
+        self,
+        number: str,
+        message_id: str,
+        emoji: str,
+        from_me: bool = False,
+    ) -> dict[str, Any]:
+        """Reage a uma mensagem com um emoji.
+
+        Serve de aviso de recebimento sem poluir a conversa: um 👀 diz "vi, estou
+        fazendo" e um ✅ diz "pronto", sem que ninguém do grupo leia um status.
+
+        A chave tem que descrever a mensagem original, `fromMe` incluído: uma
+        mensagem do próprio Max tem fromMe=True, e reagir com fromMe=False erra o
+        alvo silenciosamente — a API aceita e nada aparece.
+
+        Args:
+            number: Número ou jid da conversa
+            message_id: Id da mensagem a reagir
+            emoji: O emoji; string vazia REMOVE a reação
+            from_me: Se a mensagem original é do dono da instância
+        """
+        chat = self.resolve_send_target(number)
+        return self._make_request(
+            "POST",
+            "/message/sendReaction/{instanceId}",
+            data={
+                "key": {"remoteJid": chat, "fromMe": bool(from_me), "id": message_id},
+                "reaction": emoji,
+            },
+        )
+
     def send_render(
         self,
         number: str,

@@ -78,7 +78,11 @@ class FakeAnthropic:
 def bot(client, eventos):
     client.config.instance_name = MEU_NUMERO
     b = Bot(client, anthropic_client=FakeAnthropic(), events=eventos)
-    # find_messages (contexto) e send_text usam a fila de respostas do cliente falso
+    # find_messages (contexto) e send_text usam a fila de respostas do cliente falso.
+    # O sinal de vida (reação e presença) fica desligado aqui: ele gasta respostas da
+    # fila e embaralharia a ordem que estes testes conferem. Quem testa o sinal em si
+    # é a seção "sinal de vida", que liga e monta a fila contando com ele.
+    b.feedback = False
     return b
 
 
@@ -278,3 +282,88 @@ def test_sem_chave_avisa_claro(client, eventos, monkeypatch):
     b = Bot(client, events=eventos)
     with pytest.raises(BotError, match="ANTHROPIC_API_KEY"):
         _ = b.anthropic
+
+
+# ---------------------------------------------------------------------------
+# sinal de vida: o WhatsApp não pode ficar mudo enquanto o modelo pensa
+# ---------------------------------------------------------------------------
+
+def _fila_com_sinal(client):
+    """Reação 👀, contexto, presença, envio, reação ✅ — na ordem em que saem."""
+    client.responses.append({"key": {"id": "REACAO1"}})       # 👀
+    client.responses.append({})                                # composing
+    client.responses.append({"messages": {"records": [], "total": 0,
+                                          "pages": 1, "currentPage": 1}})
+    client.responses.append({})                                # paused
+    client.responses.append({"key": {"id": "ENVIADA0", "remoteJid": "x"}})
+    client.responses.append({"key": {"id": "REACAO2"}})        # ✅
+
+
+def test_reage_ao_receber_e_ao_terminar(bot, client):
+    bot.feedback = True
+    _fila_com_sinal(client)
+
+    bot.handle(*par(evento("IA: resuma")))
+
+    reacoes = [c for c in client.calls if c["endpoint"].startswith("/message/sendReaction")]
+    assert [r["data"]["reaction"] for r in reacoes] == ["👀", "✅"]
+    # a chave aponta para a mensagem que acionou, e ela é do próprio Max
+    assert reacoes[0]["data"]["key"] == {
+        "remoteJid": "5511888887777@s.whatsapp.net", "fromMe": True, "id": "MSG1",
+    }
+
+
+def test_liga_e_desliga_o_digitando(bot, client):
+    bot.feedback = True
+    _fila_com_sinal(client)
+
+    bot.handle(*par(evento("IA: resuma")))
+
+    presencas = [c["data"]["presence"] for c in client.calls
+                 if c["endpoint"].startswith("/chat/presenceUpdate")]
+    assert presencas == ["composing", "paused"]
+
+
+def test_a_propria_reacao_nao_vira_acionamento(bot, client):
+    """Segunda trava: o id da reação entra na lista de enviados, como o de um envio.
+
+    A primeira trava é o tipo (reação nunca é instrução). Esta aqui cobre o caso de o
+    evento chegar sem o tipo certo — na conversa pessoal, onde toda mensagem de Max é
+    instrução, um 👀 não barrado viraria acionamento e o bot responderia ao próprio aviso.
+    """
+    bot.feedback = True
+    _fila_com_sinal(client)
+    bot.handle(*par(evento("IA: resuma")))
+
+    pessoal = f"{MEU_NUMERO}@s.whatsapp.net"
+    resumo, bruto = par(evento("👀", jid=pessoal, msg_id="REACAO1"))
+    assert resumo.get("trigger") is True  # sem a lista de enviados, isto acionaria
+    assert bot.should_handle(resumo, bruto)[1] == "mensagem enviada pelo próprio bot"
+
+
+def test_uma_reacao_nunca_e_instrucao(bot):
+    """Mesmo vinda de Max na conversa pessoal: reagir não é pedir."""
+    ev = evento("👍", jid=f"{MEU_NUMERO}@s.whatsapp.net")
+    ev["data"]["messageType"] = "reactionMessage"
+    ev["data"]["message"] = {"reactionMessage": {"text": "👍", "key": {"id": "OUTRA"}}}
+
+    resumo, bruto = par(ev)
+
+    assert resumo.get("trigger") is None
+    assert bot.should_handle(resumo, bruto)[0] is False
+
+
+def test_uma_falha_ao_reagir_nao_impede_a_resposta(bot, client):
+    """Sinal é cortesia; resposta é o trabalho. A ordem de importância aparece no código."""
+    bot.feedback = True
+
+    def explode(*a, **kw):
+        raise RuntimeError("Evolution fora do ar")
+
+    client.send_reaction = explode
+    client.set_presence = explode
+    client.responses.append({"messages": {"records": [], "total": 0,
+                                          "pages": 1, "currentPage": 1}})
+    client.responses.append({"key": {"id": "ENVIADA0", "remoteJid": "x"}})
+
+    assert bot.handle(*par(evento("IA: resuma")))["acao"] == "respondido"

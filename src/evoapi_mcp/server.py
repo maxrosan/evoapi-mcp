@@ -31,8 +31,39 @@ from evoapi_mcp.formatters import (
     dumps,
 )
 
+# A regra de escolha mora aqui, e não espalhada pelas descrições das tools.
+#
+# São muitos caminhos para a mesma coisa — mandar uma imagem tem cinco —, e cada
+# docstring apontando para as outras é regra de roteamento repetida em cinco lugares:
+# funciona enquanto o modelo lê todas, e falha calado quando ele escolhe a primeira
+# que serve. Dita uma vez, no nível do servidor, ela chega antes da escolha.
+INSTRUCTIONS = """Servidor do WhatsApp de Max, pela Evolution API.
+
+O que encarece uma conversa aqui não é o envio, é o conteúdo de arquivo atravessando
+o chat em base64: um PNG de 500 KB custa mais de 150 mil tokens, e chega ilegível
+para você, porque vira texto. Toda tool daqui existe para o arquivo NÃO passar por
+você. Escolha o caminho pela origem do arquivo:
+
+- Imagem que VOCÊ vai criar (gráfico, cartão, aviso, tabela) → send_render: você
+  escreve o SVG, o servidor rasteriza. É a diferença entre mil e cem mil tokens.
+- Arquivo que já está na web → send_url (o servidor baixa; converte link de
+  compartilhamento do Drive e do Dropbox), ou send_image se a URL for direta.
+- Arquivo já no disco do servidor, como o `path` que download_media devolveu → send_file.
+- Arquivo arquivado no Drive por este servidor → send_drive_file, por id, pelo link
+  ou por pasta + nome.
+- Texto → send_text_message.
+
+Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
+documento tem camada de texto, view_media quando não tem (comprovante fotografado,
+PDF escaneado) e transcribe_audio para áudio. get_media_base64 e as tools de base64
+estão desligadas por padrão justamente por serem o caminho caro; ligue-as em
+EVOLUTION_BASE64_TOOLS só se nada mais servir.
+
+Números vão no formato internacional sem '+' (5511999999999). Um jid (@g.us, @lid)
+também é aceito onde se pede número."""
+
 # Inicializa o MCP server
-mcp = FastMCP("Evolution API")
+mcp = FastMCP("Evolution API", instructions=INSTRUCTIONS)
 
 # Carrega configuração e inicializa cliente
 try:
@@ -161,6 +192,29 @@ def send_file(
 
 
 @mcp.tool()
+def react_to_message(
+    number: str,
+    message_id: str,
+    emoji: str,
+    from_me: bool = False,
+) -> str:
+    """Reage a uma mensagem com um emoji, em vez de mandar outra mensagem.
+
+    Use quando a resposta certa é um sinal, não um texto: confirmar que viu, concordar,
+    agradecer. Não polui a conversa e as outras pessoas do grupo não leem um status.
+
+    Args:
+        number: internacional sem '+', ou o jid da conversa
+        message_id: id da mensagem (campo `id` em get_chat_messages/find_messages)
+        emoji: o emoji, ex: "👍". String vazia REMOVE a reação
+        from_me: True se a mensagem é do próprio Max — sem isso a reação não aparece
+    """
+    return _out(client.send_reaction(
+        number=number, message_id=message_id, emoji=emoji, from_me=from_me
+    ))
+
+
+@mcp.tool()
 def send_render(
     number: str,
     svg: str,
@@ -243,7 +297,6 @@ def send_url(
     return _out(out)
 
 
-@mcp.tool()
 def send_document_base64(
     number: str,
     base64_data: str,
@@ -258,7 +311,6 @@ def send_document_base64(
     )))
 
 
-@mcp.tool()
 def send_image_base64(
     number: str,
     base64_data: str,
@@ -570,13 +622,26 @@ def view_media(
     return [resumo] + [Image(data=img, format="jpeg") for img in resultado["images"]]
 
 
-@mcp.tool()
 def get_media_base64(message_id: str) -> str:
     """Devolve o anexo em base64. EVITE: custa dezenas de milhares de tokens; use download_media."""
     data = client.get_media(message_id)
     if isinstance(data, dict):
         data.pop("buffer", None)
     return _out(data)
+
+
+# As três acima são o caminho caro, e ficam DESLIGADAS por padrão.
+#
+# Elas existem por paridade com o conector antigo, mas uma tool visível é uma tool
+# que será escolhida: estando na lista, o modelo eventualmente manda um PNG inteiro
+# em base64 e queima cem mil tokens fazendo o que send_file faz de graça. Escondê-las
+# é mais eficaz que avisar na descrição que são caras — o aviso concorre com a
+# conveniência, a ausência não. EVOLUTION_BASE64_TOOLS=1 traz as três de volta para
+# quem depende delas.
+if config.base64_tools:
+    for _tool in (send_document_base64, send_image_base64, get_media_base64):
+        mcp.tool()(_tool)
+    print("Tools de base64 EXPOSTAS (EVOLUTION_BASE64_TOOLS=1)", file=sys.stderr)
 
 
 # ============================================================================
