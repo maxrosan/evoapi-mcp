@@ -20,6 +20,8 @@ from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
+from evoapi_mcp.storage import sweep, usage
+from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
     clean,
@@ -29,8 +31,39 @@ from evoapi_mcp.formatters import (
     dumps,
 )
 
+# A regra de escolha mora aqui, e não espalhada pelas descrições das tools.
+#
+# São muitos caminhos para a mesma coisa — mandar uma imagem tem cinco —, e cada
+# docstring apontando para as outras é regra de roteamento repetida em cinco lugares:
+# funciona enquanto o modelo lê todas, e falha calado quando ele escolhe a primeira
+# que serve. Dita uma vez, no nível do servidor, ela chega antes da escolha.
+INSTRUCTIONS = """Servidor do WhatsApp de Max, pela Evolution API.
+
+O que encarece uma conversa aqui não é o envio, é o conteúdo de arquivo atravessando
+o chat em base64: um PNG de 500 KB custa mais de 150 mil tokens, e chega ilegível
+para você, porque vira texto. Toda tool daqui existe para o arquivo NÃO passar por
+você. Escolha o caminho pela origem do arquivo:
+
+- Imagem que VOCÊ vai criar (gráfico, cartão, aviso, tabela) → send_render: você
+  escreve o SVG, o servidor rasteriza. É a diferença entre mil e cem mil tokens.
+- Arquivo que já está na web → send_url (o servidor baixa; converte link de
+  compartilhamento do Drive e do Dropbox), ou send_image se a URL for direta.
+- Arquivo já no disco do servidor, como o `path` que download_media devolveu → send_file.
+- Arquivo arquivado no Drive por este servidor → send_drive_file, por id, pelo link
+  ou por pasta + nome.
+- Texto → send_text_message.
+
+Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
+documento tem camada de texto, view_media quando não tem (comprovante fotografado,
+PDF escaneado) e transcribe_audio para áudio. get_media_base64 e as tools de base64
+estão desligadas por padrão justamente por serem o caminho caro; ligue-as em
+EVOLUTION_BASE64_TOOLS só se nada mais servir.
+
+Números vão no formato internacional sem '+' (5511999999999). Um jid (@g.us, @lid)
+também é aceito onde se pede número."""
+
 # Inicializa o MCP server
-mcp = FastMCP("Evolution API")
+mcp = FastMCP("Evolution API", instructions=INSTRUCTIONS)
 
 # Carrega configuração e inicializa cliente
 try:
@@ -92,7 +125,12 @@ def send_text_message(number: str, text: str, link_preview: bool = True) -> str:
 
 @mcp.tool()
 def send_image(number: str, image_url: str, caption: str | None = None) -> str:
-    """Envia imagem a partir de URL pública. Para arquivo local use send_file."""
+    """Envia imagem a partir de URL pública: quem baixa é a Evolution.
+
+    É o envio mais barato de todos quando a URL é direta e a Evolution a enxerga. Se
+    falhar, ou se o link for de compartilhamento (Drive, Dropbox), use send_url, que
+    baixa aqui no servidor. Para arquivo local use send_file.
+    """
     return _out(_enviado(
         client.send_media(number=number, media_url=image_url, media_type="image", caption=caption)
     ))
@@ -154,6 +192,111 @@ def send_file(
 
 
 @mcp.tool()
+def react_to_message(
+    number: str,
+    message_id: str,
+    emoji: str,
+    from_me: bool = False,
+) -> str:
+    """Reage a uma mensagem com um emoji, em vez de mandar outra mensagem.
+
+    Use quando a resposta certa é um sinal, não um texto: confirmar que viu, concordar,
+    agradecer. Não polui a conversa e as outras pessoas do grupo não leem um status.
+
+    Args:
+        number: internacional sem '+', ou o jid da conversa
+        message_id: id da mensagem (campo `id` em get_chat_messages/find_messages)
+        emoji: o emoji, ex: "👍". String vazia REMOVE a reação
+        from_me: True se a mensagem é do próprio Max — sem isso a reação não aparece
+    """
+    return _out(client.send_reaction(
+        number=number, message_id=message_id, emoji=emoji, from_me=from_me
+    ))
+
+
+@mcp.tool()
+def send_render(
+    number: str,
+    svg: str,
+    caption: str | None = None,
+    file_name: str = "imagem.png",
+    width: int | None = None,
+    height: int | None = None,
+    background: str | None = "white",
+) -> str:
+    """Desenha uma imagem a partir de SVG e a envia. Use quando VOCÊ for criar a imagem.
+
+    É para gráfico, cartão, aviso, tabela, comparativo, convite: você escreve o SVG
+    e o servidor rasteriza e manda. O desenho viaja como texto (2 a 5 KB num gráfico
+    inteiro); o mesmo PNG em send_image_base64 custaria dezenas de milhares de tokens.
+
+    Escreva um SVG completo, com xmlns e width/height no elemento raiz, e use fontes
+    comuns (sans-serif, serif, monospace): quem desenha é o servidor, com as fontes dele.
+    Para imagem que já existe em arquivo no servidor use send_file, e para imagem que já
+    está na web, send_url (ou send_image, se a URL for direta).
+
+    Args:
+        number: internacional sem '+'
+        svg: o documento SVG
+        caption: legenda opcional
+        file_name: nome exibido no WhatsApp
+        width: largura em pixels (padrão: a do próprio SVG)
+        height: altura em pixels (padrão: proporcional à largura)
+        background: cor de fundo; null mantém a transparência
+    Returns: {ok, id, to, ts, status, file: {path, size, type}}
+    """
+    try:
+        result = client.send_render(
+            number=number, svg=svg, caption=caption, file_name=file_name,
+            width=width, height=height, background=background,
+        )
+    except RenderError as e:
+        return _out({"error": str(e)})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
+def send_url(
+    number: str,
+    url: str,
+    caption: str | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> str:
+    """Envia um arquivo que já está na web, a partir do link. Pela conversa passa só a URL.
+
+    Use para imagem, PDF ou vídeo que já existe em algum lugar público: o servidor
+    baixa e envia, sem base64 no chat. Link de compartilhamento do Google Drive e do
+    Dropbox é convertido sozinho para o link do arquivo — no Drive, ele precisa estar
+    como "qualquer pessoa com o link".
+
+    Para imagem que você mesmo vai desenhar use send_render, e para arquivo que já está
+    no servidor (o `path` de download_media, por exemplo) use send_file.
+
+    Args:
+        number: internacional sem '+'
+        url: endereço público do arquivo
+        caption: legenda opcional
+        media_type: image|video|audio|document (padrão: deduzido do Content-Type)
+        file_name: nome exibido no WhatsApp (padrão: o nome que veio no link)
+    Returns: {ok, id, to, ts, status, file: {path, size, type, url}}
+    """
+    try:
+        result = client.send_url(
+            number=number, url=url, caption=caption,
+            media_type=media_type, file_name=file_name,
+        )
+    except WebLinkError as e:
+        return _out({"error": str(e)})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
 def send_document_base64(
     number: str,
     base64_data: str,
@@ -168,7 +311,6 @@ def send_document_base64(
     )))
 
 
-@mcp.tool()
 def send_image_base64(
     number: str,
     base64_data: str,
@@ -176,7 +318,11 @@ def send_image_base64(
     file_name: str = "image.png",
     mimetype: str = "image/png",
 ) -> str:
-    """Envia imagem a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
+    """Envia imagem a partir de base64 (sem prefixo data:).
+
+    Custa muitos tokens: prefira send_file (arquivo já no servidor), send_image (URL
+    pública) ou send_render (imagem que você mesmo desenha, em SVG).
+    """
     return _out(_enviado(client.send_media_base64(
         number=number, base64_data=base64_data, media_type="image",
         file_name=file_name, caption=caption or None, mimetype=mimetype,
@@ -394,6 +540,49 @@ def archive_to_drive(
 
 
 @mcp.tool()
+def send_drive_file(
+    number: str,
+    file_ref: str | None = None,
+    folder: str | None = None,
+    name: str | None = None,
+    caption: str | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> str:
+    """Reenvia pelo WhatsApp um arquivo já arquivado no Drive por archive_to_drive.
+
+    Use para "manda de novo aquele boleto que arquivamos": o arquivo vai do Drive para
+    o servidor e do servidor para o WhatsApp, sem base64 na conversa e sem precisar que
+    ele ainda esteja no disco daqui.
+
+    Aponte o arquivo de um dos dois jeitos: por `file_ref` (o id ou o `link` que
+    archive_to_drive devolveu) ou por `folder` + `name`. Só alcança o que este servidor
+    arquivou — arquivo que outro aplicativo criou no Drive ele não enxerga.
+
+    Args:
+        number: internacional sem '+'
+        file_ref: id do arquivo no Drive, ou o link do arquivo
+        folder: pasta onde procurar, relativa à pasta base (ex: "MR/2026/08.2026/BOLETO")
+        name: nome do arquivo dentro dessa pasta
+        caption: legenda opcional
+        media_type: image|video|audio|document (padrão: deduzido do tipo no Drive)
+        file_name: nome exibido no WhatsApp (padrão: o nome no Drive)
+    Returns: {ok, id, to, ts, status, file: {path, size, type, drive_id, link}}
+    """
+    try:
+        result = client.send_drive_file(
+            number=number, file_ref=file_ref, folder=folder, name=name,
+            caption=caption, media_type=media_type, file_name=file_name,
+        )
+    except DriveError as e:
+        return _out({"error": str(e), "drive": client.drive.describe()})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
 def view_media(
     message_id: str,
     page: int = 1,
@@ -433,7 +622,6 @@ def view_media(
     return [resumo] + [Image(data=img, format="jpeg") for img in resultado["images"]]
 
 
-@mcp.tool()
 def get_media_base64(message_id: str) -> str:
     """Devolve o anexo em base64. EVITE: custa dezenas de milhares de tokens; use download_media."""
     data = client.get_media(message_id)
@@ -442,9 +630,42 @@ def get_media_base64(message_id: str) -> str:
     return _out(data)
 
 
+# As três acima são o caminho caro, e ficam DESLIGADAS por padrão.
+#
+# Elas existem por paridade com o conector antigo, mas uma tool visível é uma tool
+# que será escolhida: estando na lista, o modelo eventualmente manda um PNG inteiro
+# em base64 e queima cem mil tokens fazendo o que send_file faz de graça. Escondê-las
+# é mais eficaz que avisar na descrição que são caras — o aviso concorre com a
+# conveniência, a ausência não. EVOLUTION_BASE64_TOOLS=1 traz as três de volta para
+# quem depende delas.
+if config.base64_tools:
+    for _tool in (send_document_base64, send_image_base64, get_media_base64):
+        mcp.tool()(_tool)
+    print("Tools de base64 EXPOSTAS (EVOLUTION_BASE64_TOOLS=1)", file=sys.stderr)
+
+
 # ============================================================================
 # TOOLS - Status e Presença
 # ============================================================================
+
+@mcp.tool()
+def cleanup_media(days: int | None = None, dry_run: bool = False) -> str:
+    """Apaga da pasta de mídias os arquivos mais velhos que `days`.
+
+    A faxina já roda sozinha uma vez por dia (EVOLUTION_MEDIA_TTL_DAYS). Use esta
+    tool quando o disco apertar antes disso, ou com dry_run=True para ver o que
+    sairia. Texto de áudio já transcrito (.transcripts) nunca é apagado.
+
+    Args:
+        days: idade máxima em dias (padrão: EVOLUTION_MEDIA_TTL_DAYS)
+        dry_run: só conta, não apaga
+    Returns: {removed, freed_mb, ttl_days, media: {files, mb, free_mb}}
+    """
+    ttl = config.media_ttl_days if days is None else days
+    resultado = sweep(client.media_dir, ttl_days=ttl, dry_run=dry_run)
+    resultado["media"] = usage(client.media_dir)
+    return _out(resultado)
+
 
 @mcp.tool()
 def get_connection_status() -> str:
@@ -474,6 +695,7 @@ def get_instance_info(full: bool = False) -> str:
         info.pop("info", None)
     info["transcription"] = client.transcriber.describe()
     info["drive"] = client.drive.describe()
+    info["media"] = usage(client.media_dir) | {"ttl_days": config.media_ttl_days}
     from evoapi_mcp.webhook import EVENTS
     info["armazenamento"] = EVENTS.store.describe()
     return _out(info)

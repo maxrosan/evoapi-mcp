@@ -1,175 +1,53 @@
-# ✅ TODO - Evolution API MCP Server
+# TODO
 
-Lista de tarefas pendentes e em progresso.
+O que está pendente de verdade. Documento curto de propósito: o histórico do que já
+foi feito mora no `CHANGELOG.md`, e como usar mora no `README.md`.
 
-**Última atualização:** 2025-10-23
-
----
-
-## 🔥 Urgente (Fazer Hoje)
-
-- [ ] Nenhuma tarefa urgente no momento
+**Última atualização:** 2026-09-12
 
 ---
 
-## 🎯 Próximas Tarefas (Esta Semana)
+## 🔴 Pendente com dono fora do código
 
-### Refatoração - Unificar Duplicações
-
-- [ ] Mesclar `fetch_contacts()` e `find_contacts()` em uma única função
-  - Localização: `src/evoapi_mcp/client.py:306-358`
-  - Criar: `fetch_contacts(contact_id: str | None = None)`
-  - Remover: `find_contacts()`
-
-- [ ] Simplificar tools de contatos no server
-  - Localização: `src/evoapi_mcp/server.py:293-359`
-  - Unificar `get_contacts()` e `find_contact()`
-  - Manter apenas: `get_contacts(contact_id=None, limit=None)`
-
-### Validações
-
-- [ ] Adicionar validação de `media_type` em `send_media()`
-  - Localização: `src/evoapi_mcp/client.py:442`
-  - Validar: `{"image", "video", "document", "audio"}`
-
-- [ ] Adicionar validação de URLs em `send_media()`
-  - Verificar se URL começa com `http://` ou `https://`
-
-- [ ] Adicionar validação de tamanho de texto
-  - Em `send_text()`: max 65536 chars (limite WhatsApp)
-
-### Cache com TTL
-
-- [ ] Implementar expiração automática do cache de contatos
-  - Adicionar `_cache_timestamp: datetime | None`
-  - Adicionar `_cache_ttl = timedelta(minutes=5)`
-  - Adicionar método `_is_cache_expired()`
-
-- [ ] Criar método `clear_cache()`
-  - Limpar `_contact_names_cache`
-  - Resetar `_cache_timestamp`
+- [ ] **Rotacionar o token da Evolution.** O token da instância esteve commitado em
+  quatro arquivos deste repositório desde os primeiros commits. Os arquivos já foram
+  limpos, mas o valor continua no histórico do git e segue válido até ser trocado no
+  painel da Evolution. Trocar lá e atualizar o `.env` do deploy.
 
 ---
 
-## 📋 Backlog (Próximo Mês)
+## 🎯 Próximo
 
-### Type Safety
+- [ ] **Grupos.** Não há nenhuma tool: criar, listar membros, adicionar e remover.
+  Hoje dá para mandar mensagem para um `@g.us`, mas não para administrá-lo.
 
-- [ ] Instalar Pydantic
-  - Adicionar `pydantic>=2.0.0` em `pyproject.toml`
+- [ ] **Retry com backoff em `_make_request`** (`client.py:285`). Uma falha de rede
+  passageira hoje sobe inteira para quem chamou; a Evolution reinicia com alguma
+  frequência e isso vira erro visível sem precisar.
 
-- [ ] Criar models:
-  - [ ] `Contact`
-  - [ ] `Chat`
-  - [ ] `Message`
-  - [ ] `MediaMessage`
+- [ ] **Upload resumível no Drive.** `upload_file` usa o upload simples, que corta em
+  5 MB (`drive.py:MAX_SIMPLE_UPLOAD`). Vídeo e PDF grande não são arquiváveis hoje.
 
-- [ ] Atualizar type hints para usar models
-
-### Error Handling
-
-- [ ] Adicionar retry logic com tenacity
-  - Instalar `tenacity>=8.0.0`
-  - Adicionar decorator `@retry` em `_make_request()`
-
-- [ ] Sanitizar logs
-  - Criar método `_sanitize_error()`
-  - Mascarar `self.api_key` nos logs
-
-### Nomenclatura
-
-- [ ] Renomear tools para melhor clareza:
-  - `get_chat_messages()` → `get_messages_from_chat()`
-  - `find_messages()` → `search_messages_globally()`
+- [ ] **Gestão de mensagens:** apagar, editar e reagir com emoji.
 
 ---
 
-## 🚀 Futuro (Próximos 3 Meses)
+## 📋 Quando sobrar tempo
 
-### Novas Funcionalidades
-
-- [ ] Grupos
-  - [ ] Criar grupo
-  - [ ] Adicionar/remover participantes
-  - [ ] Listar membros
-
-- [ ] Gestão de mensagens
-  - [ ] Deletar mensagem
-  - [ ] Editar mensagem
-  - [ ] Reagir com emoji
-  - [ ] Marcar como lida
-
-- [ ] Upload/Download
-  - [ ] Upload de arquivo local
-  - [ ] Download de mídia recebida
-
-### Testes
-
-- [ ] Setup pytest
-- [ ] Testes unitários (client.py)
-- [ ] Testes de integração (com mocks)
-- [ ] Coverage > 80%
-
-### CI/CD
-
-- [ ] GitHub Actions
-- [ ] Pre-commit hooks
-- [ ] Auto-publish no PyPI
-
-### Documentação
-
-- [ ] README.md completo
-- [ ] CHANGELOG.md
-- [ ] CONTRIBUTING.md
-- [ ] API Reference
+- [ ] Cobertura de teste do `http_server.py` além dos endpoints novos — os antigos
+  (chats, contatos, presença) nunca foram testados.
+- [ ] `ruff` no CI, junto do pytest.
+- [ ] Paginação real em `list_chats` e `get_contacts` (hoje é corte por `limit`).
+- [ ] O README não documenta o bot "IA:" — quem lê só o README não sabe que ele
+  existe, nem como ligar. Hoje isso só está no `CHANGELOG.md` e no `.env.example`.
+- [ ] Os links de clone, issues e discussões no README ainda apontam para o
+  repositório de origem (`PabloBispo/evoapi-mcp`). Decidir se ficam como atribuição
+  ou passam para este fork.
 
 ---
 
-## ✅ Concluído (Últimos 7 Dias)
+## Como este arquivo funciona
 
-### 2025-10-23
-
-- ✅ Corrigido endpoint de contatos (`/chat/contacts` → `/chat/findContacts`)
-- ✅ Corrigido processamento de resposta (lista direta, não `{"data": [...]}`)
-- ✅ Otimizado busca de nomes (bulk fetch ao invés de N+1 requests)
-- ✅ Implementado cache de nomes em memória
-- ✅ Adicionado enriquecimento automático de chats com nomes
-
-### 2025-10-22
-
-- ✅ Migrado de biblioteca `evolutionapi` para HTTP direto com `requests`
-- ✅ Implementados todos endpoints principais da Evolution API
-- ✅ Adicionado suporte a contatos e nomes
-- ✅ Criados tools MCP completos
-- ✅ Adicionados parâmetros `limit` em todos os tools de listagem
-
----
-
-## 📝 Notas
-
-### Formato de Tarefas
-
-```markdown
-- [ ] Descrição da tarefa
-  - Localização: arquivo:linha
-  - Contexto adicional
-  - Impacto esperado
-```
-
-### Prioridades
-
-- 🔥 **Urgente**: Fazer hoje
-- 🎯 **Alta**: Esta semana
-- 📋 **Média**: Este mês
-- 🚀 **Baixa**: Próximos 3 meses
-
-### Como Marcar Tarefa como Concluída
-
-1. Mover de "Próximas Tarefas" para "Concluído"
-2. Adicionar data: `### YYYY-MM-DD`
-3. Trocar `- [ ]` por `- ✅`
-4. Adicionar commit hash se aplicável
-
----
-
-**Dica:** Use `Ctrl+F` para buscar tarefas específicas por arquivo ou funcionalidade.
+Entra aqui o que está pendente e é verdade hoje. O que foi feito sai daqui e vai para
+o `CHANGELOG.md` — um item concluído que fica para trás neste arquivo é pior que
+nenhum item, porque manda quem lê procurar problema que já não existe.

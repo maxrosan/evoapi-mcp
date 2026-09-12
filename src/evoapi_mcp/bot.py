@@ -13,6 +13,10 @@ Desenho, e o porquê de cada trava:
 - **Conversa pessoal é o canal principal.** Lá toda mensagem dele é instrução, sem
   prefixo, e é assim que ele já usava antes desta funcionalidade existir.
 - **Teto de gasto diário.** Ao estourar, avisa uma vez e para.
+- **Sinal de vida.** Ao ser acionado ele reage com 👀 e liga o "digitando…"; ao
+  responder, troca por ✅. Sem isso o WhatsApp fica parado por dezenas de segundos
+  e não dá para distinguir "pensando" de "morreu". Reação nunca aciona nada (a
+  trava vive em `webhook.summarize_event`), então o próprio 👀 não vira laço.
 
 As mensagens das outras pessoas entram como dado, nunca como instrução: o prompt de
 sistema diz isso explicitamente, porque o histórico de um grupo é território hostil.
@@ -35,6 +39,11 @@ DEFAULT_MODEL = "claude-opus-5"
 MAX_TOKENS = 2000
 CONTEXT_MESSAGES = 25
 MAX_SEEN = 500
+
+# Aviso de recebimento e de conclusão. Reação em vez de mensagem de status: ninguém
+# mais na conversa precisa ler "processando…".
+EMOJI_RECEBIDO = "👀"
+EMOJI_PRONTO = "✅"
 
 
 class BotError(Exception):
@@ -129,6 +138,9 @@ class Bot:
         # `instance_name` é um apelido ("Max 1"), não um telefone: o número vem da
         # configuração própria. Antes daqui isto estava errado e nunca reconhecia nada.
         self._own_number = self._digits(getattr(client.config, "owner_number", ""))
+        # Ligado por padrão: é barato e é o que faz a espera parecer espera, e não
+        # silêncio. EVOLUTION_BOT_FEEDBACK=0 desliga para quem não quer as reações.
+        self.feedback = os.environ.get("EVOLUTION_BOT_FEEDBACK", "1").strip() != "0"
 
     # ------------------------------------------------------------------ apoio
 
@@ -193,6 +205,29 @@ class Bot:
 
     # ---------------------------------------------------------------- ação
 
+    def _sinalizar(self, chat: str, message_id: str, emoji: str, from_me: bool) -> None:
+        """Reage à mensagem que acionou. Falha aqui nunca impede a resposta."""
+        if not self.feedback or not chat or not message_id:
+            return
+        try:
+            enviado = self.client.send_reaction(chat, message_id, emoji, from_me=from_me)
+            # O id da reação entra na mesma lista dos envios: o evento dela volta
+            # marcado como `fromMe` e não pode ser confundido com um acionamento.
+            reacao_id = ((enviado or {}).get("key") or {}).get("id")
+            if reacao_id:
+                self._sent.append(reacao_id)
+        except Exception as e:
+            _log(f"não consegui reagir com {emoji}: {e}", "WARNING")
+
+    def _digitando(self, chat: str, ligado: bool) -> None:
+        """Liga e desliga o 'digitando…' na conversa. Também nunca atrapalha."""
+        if not self.feedback or not chat:
+            return
+        try:
+            self.client.set_presence("composing" if ligado else "paused", number=chat)
+        except Exception as e:
+            _log(f"não consegui mudar a presença: {e}", "WARNING")
+
     def handle(self, resumo: dict[str, Any], raw: dict[str, Any] | None = None) -> dict[str, Any]:
         """Processa um evento. Só age quando `should_handle` autoriza."""
         pode, motivo = self.should_handle(resumo, raw)
@@ -208,14 +243,21 @@ class Bot:
         self.events.mark_handled([message_id], chat=chat, instruction=instrucao)
 
         _log(f"acionado em {resumo.get('chat_type')} ({message_id})")
+        # A instrução veio do próprio Max, então a mensagem original é fromMe.
+        de_mim = bool(resumo.get("from_me"))
+        self._sinalizar(chat, message_id, EMOJI_RECEBIDO, de_mim)
+        self._digitando(chat, True)
         try:
             resposta, uso = self._pensar(chat, instrucao)
         except BotError:
+            self._digitando(chat, False)
             raise
         except Exception as e:
+            self._digitando(chat, False)
             _log(f"falha ao gerar resposta: {e}", "ERROR")
             return {"acao": "erro", "motivo": str(e)[:200]}
 
+        self._digitando(chat, False)
         if not resposta:
             return {"acao": "sem_resposta", "motivo": "modelo não produziu texto"}
 
@@ -224,6 +266,10 @@ class Bot:
         enviado_id = ((enviado or {}).get("key") or {}).get("id")
         if enviado_id:
             self._sent.append(enviado_id)
+
+        # ✅ substitui o 👀 na mesma mensagem: o WhatsApp guarda uma reação por
+        # pessoa, então não sobra rastro de "estou fazendo" depois de feito.
+        self._sinalizar(chat, message_id, EMOJI_PRONTO, de_mim)
 
         _log(f"respondido ({len(resposta)} chars, US$ {custo:.4f})")
         return {

@@ -12,6 +12,11 @@ milhares do base64, e ainda por cima funciona.
 
 Renderização por `pypdfium2` (licença BSD/Apache, sem dependência de sistema) e
 redimensionamento por Pillow. Ambos entram pelo extra opcional `[image]`.
+
+O caminho inverso também mora aqui: `render_svg` transforma em PNG um SVG escrito
+pelo modelo, para que uma imagem criada por ele chegue ao WhatsApp como texto de
+desenho (alguns milhares de tokens) em vez de base64 de pixel (dezenas de
+milhares). Rasterização por `cairosvg`, no extra opcional `[svg]`.
 """
 
 from __future__ import annotations
@@ -154,3 +159,88 @@ def render(
         return {"images": [dados], "format": "jpeg", "pages_rendered": 1}
 
     raise RenderError(f"Não dá para transformar em imagem um arquivo do tipo {mime or path.suffix}.")
+
+
+# ===========================================================================
+# SVG VIRANDO IMAGEM (o caminho inverso: o modelo desenha, o servidor rasteriza)
+# ===========================================================================
+
+# Teto do SVG aceito. O ganho desta rota é o desenho chegar como texto, e texto
+# de verdade cabe muito abaixo disso: um gráfico inteiro dá 2 a 5 KB. Um SVG de
+# centenas de KB quase sempre é pixel disfarçado (um `<image>` com data: URI),
+# e aí a conta volta a ser a do base64, que é exatamente o que se quer evitar.
+MAX_SVG_CHARS = 200_000
+
+# Teto de cada lado da imagem gerada, para um width errado não virar um PNG de
+# centenas de MB no disco do servidor.
+MAX_SIDE_OUT = 4000
+
+
+def _require_cairosvg():
+    try:
+        import cairosvg
+    except ImportError:
+        raise RenderError('cairosvg não instalado (pip install -e ".[svg]")')
+    except OSError as e:
+        # cairocffi abre a libcairo do sistema por dlopen; sem ela o erro só
+        # aparece aqui, e a mensagem crua ("no library called cairo-2") não diz
+        # a ninguém o que instalar.
+        raise RenderError(f"biblioteca cairo do sistema ausente (apt install libcairo2): {e}")
+    return cairosvg
+
+
+def render_svg(
+    svg: str,
+    width: int | None = None,
+    height: int | None = None,
+    background: str | None = "white",
+) -> bytes:
+    """Rasteriza um SVG em PNG.
+
+    Args:
+        svg: o documento SVG em texto
+        width: largura da imagem em pixels (padrão: a do próprio SVG)
+        height: altura em pixels (padrão: proporcional à largura)
+        background: cor de fundo; None mantém a transparência
+
+    Returns:
+        bytes: o PNG
+
+    Raises:
+        RenderError: SVG vazio, grande demais, malformado ou dependência ausente
+    """
+    cairosvg = _require_cairosvg()
+
+    texto = (svg or "").strip()
+    if not texto:
+        raise RenderError("SVG vazio.")
+    if "<svg" not in texto:
+        raise RenderError("O conteúdo não parece um SVG (não há tag <svg>).")
+    if len(texto) > MAX_SVG_CHARS:
+        raise RenderError(
+            f"SVG de {len(texto)} caracteres, acima do limite de {MAX_SVG_CHARS}. "
+            "Se ele embute uma imagem em data: URI, mande o arquivo por send_file."
+        )
+
+    for nome, valor in (("width", width), ("height", height)):
+        if valor is not None and not (0 < int(valor) <= MAX_SIDE_OUT):
+            raise RenderError(f"{nome} deve estar entre 1 e {MAX_SIDE_OUT} (recebido: {valor}).")
+
+    try:
+        # unsafe=False (padrão) barra entidades XML externas e leitura de arquivo
+        # local: o SVG vem de fora do servidor e não deve poder ler o disco dele.
+        dados = cairosvg.svg2png(
+            bytestring=texto.encode("utf-8"),
+            output_width=int(width) if width else None,
+            output_height=int(height) if height else None,
+            background_color=background or None,
+        )
+    except RenderError:
+        raise
+    except Exception as e:
+        raise RenderError(f"Não foi possível rasterizar o SVG: {e}")
+
+    if not dados:
+        raise RenderError("A rasterização devolveu uma imagem vazia.")
+    _log(f"SVG de {len(texto)} caracteres rasterizado em {len(dados)} bytes de PNG")
+    return dados

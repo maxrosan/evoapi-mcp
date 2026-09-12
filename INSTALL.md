@@ -3,8 +3,8 @@
 ## Passo 1: Verifique a Configuração
 
 Seu arquivo `.env` já está configurado com:
-- **URL**: https://pevo.ntropy.com.br
-- **Instância**: personal_pablo_bispo_wpp
+- **URL**: https://sua-instancia-evolution.exemplo.com
+- **Instância**: o nome da sua instância na Evolution
 - **Token**: Configurado
 
 ## Passo 2: Instale no Claude Desktop
@@ -30,12 +30,12 @@ Edite `~/Library/Application Support/Claude/claude_desktop_config.json`:
         "run",
         "mcp",
         "run",
-        "/Users/pablofernando/projects/mcp/evoapi-mcp/src/evoapi_mcp/server.py"
+        "/caminho/para/evoapi-mcp/src/evoapi_mcp/server.py"
       ],
       "env": {
-        "EVOLUTION_BASE_URL": "https://pevo.ntropy.com.br",
-        "EVOLUTION_API_TOKEN": "9795FDFBB464-495E-A823-28573A5D39EE",
-        "EVOLUTION_INSTANCE_NAME": "personal_pablo_bispo_wpp",
+        "EVOLUTION_BASE_URL": "https://sua-instancia-evolution.exemplo.com",
+        "EVOLUTION_API_TOKEN": "SEU-TOKEN-DA-EVOLUTION",
+        "EVOLUTION_INSTANCE_NAME": "sua-instancia",
         "EVOLUTION_TIMEOUT": "30"
       }
     }
@@ -83,11 +83,11 @@ Envie uma mensagem de teste para 5511999999999 dizendo "Olá!"
 ### Erro de autenticação
 
 1. Verifique se o token está correto no `.env` ou no config
-2. Verifique se a instância `personal_pablo_bispo_wpp` existe e está ativa
+2. Verifique se a instância `sua-instancia` existe e está ativa
 
 ### Instância desconectada
 
-1. Acesse https://pevo.ntropy.com.br
+1. Acesse https://sua-instancia-evolution.exemplo.com
 2. Faça login
 3. Reconecte a instância se necessário
 
@@ -96,7 +96,7 @@ Envie uma mensagem de teste para 5511999999999 dizendo "Olá!"
 ### Testar localmente (modo dev)
 
 ```bash
-cd /Users/pablofernando/projects/mcp/evoapi-mcp
+cd /caminho/para/evoapi-mcp
 uv run mcp dev src/evoapi_mcp/server.py
 ```
 

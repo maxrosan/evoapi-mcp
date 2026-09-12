@@ -52,6 +52,12 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ Respostas compactas por padrão (~10x menos tokens que o JSON bruto do WhatsApp)
 - ✅ `download_media` grava o anexo em disco e devolve só caminho + metadados (nunca base64)
 - ✅ `send_file` envia arquivo local sem passar base64 pelo chat
+- ✅ `send_render` desenha a imagem a partir do SVG do modelo: o desenho viaja como texto
+- ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
+- ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
+- ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
+- ✅ Tools de base64 escondidas por padrão: o caminho caro não fica à mão sem querer
+- ✅ A regra de "qual tool usar" viaja no próprio servidor (instructions do MCP)
 - ✅ Extração de texto de PDF/txt (`extract_text=True`) para identificar documentos sem abri-los
 - ✅ Busca textual local em `find_messages`/`get_chat_messages` (só as mensagens que casam voltam)
 - ✅ Limites padrão menores (20 itens) e corte de texto configurável
@@ -141,6 +147,121 @@ por cima chega como texto e é ilegível para o modelo. Para documento que já t
 `download_media(extract_text=True)` continua muito mais barato.
 
 Requer o extra `[image]` (pypdfium2 e Pillow).
+
+### Imagem criada pelo modelo (gráfico, cartão, aviso)
+
+Quando é o próprio modelo que cria a imagem, mandar o PNG em `send_image_base64` custa
+o arquivo inteiro em base64 dentro da conversa. `send_render` inverte a rota: o modelo
+escreve o **SVG**, que é texto, e o servidor rasteriza e envia.
+
+```
+send_render(number="5511999999999", svg="<svg xmlns=...>...</svg>", caption="vendas de setembro")
+```
+
+Um gráfico de barras de 1.159 caracteres de SVG vira um PNG cujo base64 tem 16.780:
+14x mais barato neste caso, e a diferença cresce conforme a imagem ganha detalhe —
+é o conteúdo do arquivo que pesa, não o envio. O PNG fica gravado em
+`<EVOLUTION_MEDIA_DIR>/render/`, então dá para reenviar ou arquivar pelo `path`
+devolvido sem desenhar de novo.
+
+Escreva um SVG completo (com `xmlns` e `width`/`height` na raiz) e use fontes comuns —
+`sans-serif`, `serif`, `monospace` —, porque as fontes disponíveis são as do servidor.
+`width`/`height` redimensionam na rasterização e `background=null` mantém a transparência.
+Para imagem que já existe em arquivo continue usando `send_file`, e para imagem que já
+está na web, `send_image` com a URL (aí quem baixa é a Evolution, e o custo é o do link).
+
+Requer o extra `[svg]` (cairosvg) e, no sistema, a `libcairo2` — já incluída na imagem
+Docker. Sem ela, a tool devolve um erro dizendo o que instalar em vez de quebrar.
+
+### Imagem que já existe em algum lugar
+
+Quando o arquivo já está publicado, o link é tudo que precisa atravessar a conversa:
+
+```
+send_url(number="5511999999999", url="https://drive.google.com/file/d/1AbC.../view", caption="a arte")
+```
+
+O servidor baixa e envia. Link de compartilhamento do **Google Drive** e do **Dropbox**
+é convertido sozinho para o link do arquivo em si — sem isso o download traz a página
+HTML, não a imagem. O tipo (`image`, `video`, `audio`, `document`) sai do `Content-Type`,
+o arquivo fica em `<EVOLUTION_MEDIA_DIR>/web/` e o teto de download é 16 MB.
+
+No Drive, o arquivo precisa estar compartilhado como *qualquer pessoa com o link* —
+o que também significa que qualquer um com o link o vê. Se não estiver, a tool diz isso
+em vez de falhar de forma opaca.
+
+`send_image(number, image_url)` continua sendo o mais barato de todos quando a URL é
+direta: quem baixa é a própria Evolution, e o servidor nem toca no arquivo. `send_url`
+é o atalho para quando isso não dá certo — link de compartilhamento, ou uma URL que a
+Evolution não enxerga.
+
+Por segurança, o download só sai para endereço público: `http`/`https`, e todo salto de
+redirecionamento é conferido, para que o servidor não sirva de ponte para a rede interna
+a partir de um link que chegou pelo WhatsApp.
+
+### Qual tool usar, e por que isso mora no servidor
+
+São cinco caminhos para mandar uma imagem. Qual usar não depende de o modelo ler as
+cinco descrições e comparar: a regra chega junto com o servidor, nas `instructions`
+do MCP (`server.py`), ditas uma vez:
+
+| origem do arquivo | tool |
+|---|---|
+| você vai desenhar | `send_render` (SVG) |
+| já está na web | `send_url`, ou `send_image` se a URL for direta |
+| já está no disco do servidor | `send_file` |
+| foi arquivado no Drive por aqui | `send_drive_file` |
+| é texto | `send_text_message` |
+
+As três tools de base64 (`send_image_base64`, `send_document_base64`,
+`get_media_base64`) ficam **escondidas por padrão**. Elas existem por paridade com o
+conector antigo, mas tool visível é tool escolhida: estando na lista, mais cedo ou
+mais tarde um PNG inteiro sai em base64 e queima cem mil tokens fazendo o que
+`send_file` faz de graça. Esconder funciona melhor que avisar na descrição — o aviso
+concorre com a conveniência, a ausência não. Para trazê-las de volta:
+
+```bash
+EVOLUTION_BASE64_TOOLS=1
+```
+
+### Reenviar o que já foi arquivado no Drive
+
+`archive_to_drive` era mão única: o boleto guardado em agosto só voltava a ser
+alcançável enquanto a cópia local existisse. `send_drive_file` fecha o ciclo:
+
+```
+send_drive_file(number="5511999999999", file_ref="<id ou o link que archive_to_drive devolveu>")
+send_drive_file(number="5511999999999", folder="MR/2026/08.2026/BOLETO", name="boleto.pdf")
+```
+
+O arquivo vai do Drive para o servidor e do servidor para o WhatsApp, sem base64 na
+conversa e sem depender de o arquivo ainda estar no disco daqui. Só alcança o que
+**este servidor** arquivou: o escopo `drive.file` dá acesso ao que o próprio app criou,
+e é justamente por isso que não é preciso escopo restrito, verificação do Google nem
+tornar nada público.
+
+### Faxina da pasta de mídias
+
+Tudo que o servidor toca vira arquivo: anexo baixado, PNG rasterizado, download de URL,
+arquivo trazido do Drive. Num container o disco é pequeno, e quando ele enche não quebra
+só o download — quebra envio, transcrição e arquivamento ao mesmo tempo, com mensagens de
+erro que não falam em disco.
+
+Por isso a pasta tem prazo de validade:
+
+```bash
+EVOLUTION_MEDIA_TTL_DAYS=30   # padrão; 0 desliga
+```
+
+A varredura roda sozinha no máximo uma vez por dia, disparada por quem grava. Para
+adiantar, ou só para ver o que sairia:
+
+```
+cleanup_media(days=7, dry_run=True)
+```
+
+Texto de áudio já transcrito (`.transcripts`) nunca é apagado: é barato de guardar e caro
+de refazer. O uso de disco aparece em `get_instance_info` e em `GET /instance/status`.
 
 ### PDFs protegidos por senha
 
@@ -252,9 +373,9 @@ EVOLUTION_TIMEOUT=30
 
 **Exemplo real:**
 ```bash
-EVOLUTION_BASE_URL=https://pevo.ntropy.com.br
-EVOLUTION_API_TOKEN=9795FDFBB464-495E-A823-28573A5D39EE
-EVOLUTION_INSTANCE_NAME=personal_pablo_bispo_wpp
+EVOLUTION_BASE_URL=https://sua-instancia-evolution.exemplo.com
+EVOLUTION_API_TOKEN=SEU-TOKEN-DA-EVOLUTION
+EVOLUTION_INSTANCE_NAME=sua-instancia
 EVOLUTION_TIMEOUT=15
 ```
 
@@ -473,40 +594,23 @@ uv run evoapi-mcp
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ O que falta
 
-Veja o arquivo [ROADMAP.md](ROADMAP.md) para planos futuros:
+O pendente de verdade está em **[TODO.md](TODO.md)** — em resumo: gerenciamento de
+grupos, retry com backoff nas chamadas à Evolution, upload resumível no Drive (hoje o
+arquivamento corta em 5 MB) e apagar/editar/reagir a mensagem.
 
-### 🔴 FASE 1 - Correções Críticas (Curto Prazo)
-- [ ] Unificar duplicações de código
-- [ ] Adicionar validações robustas
-- [ ] Cache com TTL
-
-### 🟡 FASE 2 - Melhorias de Qualidade (Médio Prazo)
-- [ ] Type safety com Pydantic
-- [ ] Retry logic automático
-- [ ] Sanitização de logs
-
-### 🟢 FASE 3 - Novas Funcionalidades (Longo Prazo)
-- [ ] Gerenciamento de grupos
-- [ ] Deletar/editar mensagens
-- [ ] Upload de arquivos locais
-- [ ] Download de mídias recebidas
-- [ ] Status (stories)
-
-### 🧪 FASE 4 - DevOps
-- [ ] Testes automatizados
-- [ ] CI/CD com GitHub Actions
-- [ ] Documentação completa
+O que já foi feito está no **[CHANGELOG.md](CHANGELOG.md)**, que é o histórico vivo
+do projeto.
 
 ---
 
-## 📚 Documentação Adicional
+## 📚 Documentação
 
-- **[ROADMAP.md](ROADMAP.md)** - Plano de desenvolvimento futuro
-- **[TODO.md](TODO.md)** - Tarefas pendentes organizadas
-- **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)** - Problemas conhecidos e soluções
-- **[FIXES.md](FIXES.md)** - Histórico de correções aplicadas
+- **[README.md](README.md)** - este arquivo: o que o servidor faz e como usar
+- **[INSTALL.md](INSTALL.md)** - instalação no Claude Desktop
+- **[CHANGELOG.md](CHANGELOG.md)** - o que mudou em cada versão
+- **[TODO.md](TODO.md)** - o que está pendente
 
 ---
 

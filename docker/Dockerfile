@@ -5,6 +5,8 @@
 #   INSTALL_AUDIO=true|false  inclui faster-whisper e baixa o modelo (padrão: true)
 #   O extra [image] (pypdfium2 + Pillow) entra sempre: é o que permite ler
 #   comprovante escaneado, devolvendo a página como imagem.
+#   O extra [svg] (cairosvg) também entra sempre: é o que permite send_render
+#   desenhar uma imagem a partir do SVG do modelo. Precisa de libcairo2 no runtime.
 #   WHISPER_MODEL=small       modelo pré-baixado na imagem (tiny, base, small, medium)
 #
 # Comandos disponíveis no container:
@@ -43,9 +45,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Extra [pdf]: extração de texto de PDF. Extra [audio]: transcrição local.
 RUN pip install --no-cache-dir --upgrade pip && \
     if [ "$INSTALL_AUDIO" = "true" ]; then \
-        pip install --no-cache-dir ".[pdf,audio,image,bot,db]"; \
+        pip install --no-cache-dir ".[pdf,audio,image,svg,bot,db]"; \
     else \
-        pip install --no-cache-dir ".[pdf,image,bot,db]"; \
+        pip install --no-cache-dir ".[pdf,image,svg,bot,db]"; \
     fi
 
 # Pré-baixar o modelo de transcrição: sem isso cada restart do container
@@ -67,9 +69,11 @@ LABEL maintainer="Pablo Bispo <pablo@example.com>"
 LABEL description="Evolution API MCP Server"
 LABEL version="1.2.0"
 
-# Instalar apenas runtime dependencies
+# Instalar apenas runtime dependencies.
+# libcairo2: cairosvg a abre por dlopen; sem ela o send_render não rasteriza.
 RUN apt-get update && apt-get install -y \
     curl \
+    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Criar usuário não-root

@@ -25,8 +25,10 @@ from evoapi_mcp.formatters import (
     truncate,
 )
 from evoapi_mcp.drive import DriveClient, DriveError
-from evoapi_mcp.rendering import RenderError, is_renderable, render
+from evoapi_mcp.rendering import RenderError, is_renderable, render, render_svg
+from evoapi_mcp.storage import sweep_if_due
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
+from evoapi_mcp.weblink import fetch as fetch_url
 
 PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
 GROUP_JID_SUFFIX = "@g.us"
@@ -768,6 +770,18 @@ class EvolutionClient:
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
         return name[:150] or "media"
 
+    def _faxina(self) -> None:
+        """Faxina da pasta de mídias, disparada por quem acabou de gravar.
+
+        Fica aqui, e não num agendador, porque o servidor não tem um: quem grava é
+        quem enche o disco, então é ele quem paga a conta. `sweep_if_due` desiste
+        na hora se já varreu nas últimas 24h, e falha nunca atrapalha o envio.
+        """
+        try:
+            sweep_if_due(self.media_dir, int(getattr(self.config, "media_ttl_days", 0) or 0))
+        except Exception as e:
+            self._log(f"faxina da pasta de mídias falhou: {e}", "WARN")
+
     def _unique_path(self, directory: Path, filename: str) -> Path:
         candidate = directory / filename
         if not candidate.exists():
@@ -848,6 +862,7 @@ class EvolutionClient:
         path = self._unique_path(directory, self._safe_filename(filename))
         path.write_bytes(content)
         self._log(f"Mídia salva em {path} ({len(content)} bytes)")
+        self._faxina()
 
         result: dict[str, Any] = {
             "path": str(path),
@@ -1050,6 +1065,231 @@ class EvolutionClient:
         )
         if isinstance(result, dict):
             result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
+        return result
+
+    def send_reaction(
+        self,
+        number: str,
+        message_id: str,
+        emoji: str,
+        from_me: bool = False,
+    ) -> dict[str, Any]:
+        """Reage a uma mensagem com um emoji.
+
+        Serve de aviso de recebimento sem poluir a conversa: um 👀 diz "vi, estou
+        fazendo" e um ✅ diz "pronto", sem que ninguém do grupo leia um status.
+
+        A chave tem que descrever a mensagem original, `fromMe` incluído: uma
+        mensagem do próprio Max tem fromMe=True, e reagir com fromMe=False erra o
+        alvo silenciosamente — a API aceita e nada aparece.
+
+        Args:
+            number: Número ou jid da conversa
+            message_id: Id da mensagem a reagir
+            emoji: O emoji; string vazia REMOVE a reação
+            from_me: Se a mensagem original é do dono da instância
+        """
+        chat = self.resolve_send_target(number)
+        return self._make_request(
+            "POST",
+            "/message/sendReaction/{instanceId}",
+            data={
+                "key": {"remoteJid": chat, "fromMe": bool(from_me), "id": message_id},
+                "reaction": emoji,
+            },
+        )
+
+    def send_render(
+        self,
+        number: str,
+        svg: str,
+        caption: str | None = None,
+        file_name: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        background: str | None = "white",
+    ) -> dict[str, Any]:
+        """Rasteriza um SVG aqui e envia o PNG resultante.
+
+        É o caminho barato para uma imagem criada pelo próprio modelo: o desenho
+        atravessa a conversa como texto (um gráfico dá 2 a 5 KB) e vira pixel só
+        no servidor. O mesmo desenho em base64 custaria dezenas de milhares de
+        tokens, porque é o conteúdo do arquivo que pesa, não o envio.
+
+        O PNG fica gravado em `<media_dir>/render/`, então dá para reenviar ou
+        arquivar depois pelo `path` devolvido, sem desenhar de novo.
+
+        Args:
+            number: Número de destino
+            svg: O documento SVG
+            caption: Legenda opcional
+            file_name: Nome exibido no WhatsApp (padrão: imagem.png)
+            width: Largura em pixels (padrão: a do próprio SVG)
+            height: Altura em pixels (padrão: proporcional à largura)
+            background: Cor de fundo; None mantém a transparência
+
+        Raises:
+            RenderError: SVG inválido, grande demais ou dependência ausente
+        """
+        png = render_svg(svg, width=width, height=height, background=background)
+
+        nome = self._safe_filename(file_name or "imagem.png")
+        if not nome.lower().endswith(".png"):
+            nome = f"{Path(nome).stem or 'imagem'}.png"
+        # Subpasta própria: o que o modelo desenhou não se mistura com o que veio
+        # do WhatsApp, e limpar um não apaga o outro.
+        directory = self.media_dir / "render"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(png)
+        self._log(f"SVG rasterizado em {path} ({len(png)} bytes)")
+        self._faxina()
+
+        return self.send_file(
+            number=number,
+            file_path=str(path),
+            caption=caption,
+            media_type="image",
+            file_name=nome,
+        )
+
+    def send_url(
+        self,
+        number: str,
+        url: str,
+        caption: str | None = None,
+        media_type: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Baixa o arquivo da URL aqui e o envia.
+
+        Atalho para o que já existe na web: pela conversa passa só o link. A
+        diferença para `send_media(media_url=...)`, em que a própria Evolution
+        baixa, é que aqui o download é do servidor — dá para converter link de
+        compartilhamento, deduzir o tipo pelo Content-Type e dizer o que houve
+        quando o link não serve, em vez de uma falha opaca lá na Evolution.
+
+        Args:
+            number: Número de destino
+            url: Endereço público do arquivo
+            caption: Legenda opcional
+            media_type: image/video/audio/document (padrão: deduzido do Content-Type)
+            file_name: Nome exibido no WhatsApp (padrão: o nome que veio no link)
+
+        Raises:
+            WebLinkError: endereço recusado, erro HTTP ou arquivo grande demais
+        """
+        baixado = fetch_url(url, timeout=self.timeout)
+        mime = baixado["mime"]
+        nome = self._safe_filename(file_name or baixado["file_name"])
+
+        # Muito servidor devolve octet-stream para qualquer arquivo. Com isso o
+        # WhatsApp não sabe o que exibir, e a extensão do nome diz mais.
+        if mime in ("", "application/octet-stream", "binary/octet-stream"):
+            mime = mimetypes.guess_type(nome)[0] or mime
+
+        if not media_type:
+            raiz = mime.split("/")[0]
+            media_type = (
+                raiz if raiz in ("image", "video", "audio")
+                else _EXT_MEDIA_TYPE.get(Path(nome).suffix.lower(), "document")
+            )
+
+        # Guardado em disco como o resto: reenviar ou arquivar depois não baixa de novo.
+        directory = self.media_dir / "web"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(baixado["content"])
+        self._log(f"Arquivo de {baixado['url']} salvo em {path} ({len(baixado['content'])} bytes)")
+        self._faxina()
+
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(baixado["content"]).decode("ascii"),
+            media_type=media_type,
+            file_name=nome,
+            caption=caption,
+            mimetype=mime or mimetypes.guess_type(nome)[0],
+        )
+        if isinstance(result, dict):
+            result.setdefault("_file", {
+                "path": str(path),
+                "size": len(baixado["content"]),
+                "type": media_type,
+                "url": baixado["url"],
+            })
+        return result
+
+    def send_drive_file(
+        self,
+        number: str,
+        file_ref: str | None = None,
+        folder: str | None = None,
+        name: str | None = None,
+        caption: str | None = None,
+        media_type: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Reenvia pelo WhatsApp um arquivo que este servidor arquivou no Drive.
+
+        Fecha o ciclo do `archive_to_drive`, que até aqui era mão única: o boleto
+        arquivado em agosto voltava a ser alcançável só enquanto a cópia local
+        existisse. Nada disso passa pela conversa — o arquivo vai do Drive para o
+        servidor e do servidor para o WhatsApp.
+
+        Args:
+            number: Número de destino
+            file_ref: id do arquivo ou o link devolvido por archive_to_drive
+            folder: caminho da pasta, quando for procurar por nome (ex: "MR/2026/08.2026/BOLETO")
+            name: nome do arquivo dentro dessa pasta
+            caption: Legenda opcional
+            media_type: image/video/audio/document (padrão: deduzido do tipo no Drive)
+            file_name: Nome exibido no WhatsApp (padrão: o nome no Drive)
+
+        Raises:
+            DriveError: Drive não configurado, arquivo não encontrado ou grande demais
+        """
+        if file_ref:
+            file_id = self.drive.file_id_from(file_ref)
+        elif name:
+            file_id = self.drive.find_in_folder(folder or "", name)
+        else:
+            raise DriveError("Informe file_ref (id ou link) ou name (com folder).")
+
+        baixado = self.drive.download_file(file_id)
+        mime = baixado["mime"]
+        nome = self._safe_filename(file_name or baixado["name"])
+
+        if not media_type:
+            raiz = mime.split("/")[0]
+            media_type = (
+                raiz if raiz in ("image", "video", "audio")
+                else _EXT_MEDIA_TYPE.get(Path(nome).suffix.lower(), "document")
+            )
+
+        directory = self.media_dir / "drive"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(baixado["content"])
+        self._log(f"Arquivo {baixado['name']} trazido do Drive para {path}")
+        self._faxina()
+
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(baixado["content"]).decode("ascii"),
+            media_type=media_type,
+            file_name=nome,
+            caption=caption,
+            mimetype=mime or mimetypes.guess_type(nome)[0],
+        )
+        if isinstance(result, dict):
+            result.setdefault("_file", {
+                "path": str(path),
+                "size": baixado["size"],
+                "type": media_type,
+                "drive_id": file_id,
+                "link": baixado.get("link"),
+            })
         return result
 
     # =========================================================================

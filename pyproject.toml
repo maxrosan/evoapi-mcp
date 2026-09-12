@@ -26,6 +26,12 @@ image = [
     "pypdfium2>=4.30.0",
     "pillow>=10.0.0",
 ]
+# Separado de [image] porque, ao contrário de pypdfium2, cairosvg depende da
+# libcairo do sistema (apt install libcairo2). Quem instala sem ela recebe um
+# recado claro na primeira chamada, em vez de um ImportError na importação.
+svg = [
+    "cairosvg>=2.7.0",
+]
 bot = [
     "anthropic>=0.70.0",
 ]

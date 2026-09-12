@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,6 +50,13 @@ SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 # Limite do upload simples da API; acima disso seria preciso upload resumível
 MAX_SIMPLE_UPLOAD = 5 * 1024 * 1024
+
+# Teto do download. O WhatsApp recusa mídia muito maior, e sem teto um arquivo
+# grande no Drive viraria memória e disco do servidor de uma vez.
+MAX_DOWNLOAD = 16 * 1024 * 1024
+
+# Id do arquivo dentro de um link do Drive (o que archive_to_drive devolve em `link`)
+_LINK_ID = re.compile(r"/(?:file|d)/d/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)")
 
 
 class DriveError(Exception):
@@ -266,4 +274,91 @@ class DriveClient:
             "folder": f"{self.root}/{folder}".strip("/") if folder else self.root or "root",
             "size": len(conteudo),
             "link": d.get("webViewLink"),
+        }
+
+    # -------------------------------------------------------------- download
+
+    @staticmethod
+    def file_id_from(ref: str) -> str:
+        """Aceita tanto o id cru quanto o link que `archive_to_drive` devolveu."""
+        ref = (ref or "").strip()
+        if not ref:
+            raise DriveError("Informe o id ou o link do arquivo no Drive.")
+        if "://" not in ref:
+            return ref
+        achado = _LINK_ID.search(ref)
+        if not achado:
+            raise DriveError(f"Não achei o id do arquivo neste link: {ref}")
+        return achado.group(1) or achado.group(2)
+
+    def get_metadata(self, file_id: str) -> dict[str, Any]:
+        """Nome, tipo e tamanho de um arquivo, sem baixá-lo."""
+        self._require()
+        r = requests.get(
+            f"{FILES_URL}/{file_id}",
+            headers=self._headers(),
+            params={"fields": "id,name,mimeType,size,webViewLink", "supportsAllDrives": "true"},
+            timeout=self.timeout,
+        )
+        return self._check(r, f"Consulta do arquivo {file_id}")
+
+    def find_in_folder(self, folder: str, name: str) -> str:
+        """Id de um arquivo pelo caminho da pasta e pelo nome, sem precisar guardar id."""
+        parent = self.ensure_folder(folder or "", create=False)
+        achado = self.find_child(name, parent)
+        if not achado:
+            raise DriveError(f"Arquivo '{name}' não encontrado em '{folder or self.root or 'raiz'}'.")
+        return achado
+
+    def download_file(self, file_id: str, max_bytes: int = MAX_DOWNLOAD) -> dict[str, Any]:
+        """Baixa para a memória um arquivo que este app criou.
+
+        O escopo `drive.file` é de leitura E escrita sobre o que o próprio app criou,
+        então isto alcança tudo que saiu de `upload_file` — sem escopo restrito, sem
+        verificação do Google e sem precisar tornar nada público.
+
+        Returns:
+            dict: {content: bytes, name, mime, size, id, link}
+        """
+        self._require()
+        meta = self.get_metadata(file_id)
+
+        declarado = int(meta.get("size") or 0)
+        if declarado > max_bytes:
+            raise DriveError(
+                f"'{meta.get('name')}' tem {declarado / 1048576:.1f} MB, acima do limite de "
+                f"{max_bytes // 1048576} MB."
+            )
+
+        r = requests.get(
+            f"{FILES_URL}/{file_id}",
+            headers=self._headers(),
+            params={"alt": "media", "supportsAllDrives": "true"},
+            stream=True,
+            timeout=max(self.timeout, 120),
+        )
+        if r.status_code >= 300:
+            r.close()
+            self._check(r, f"Download de {file_id}")
+
+        conteudo = bytearray()
+        try:
+            for pedaco in r.iter_content(chunk_size=64 * 1024):
+                conteudo.extend(pedaco)
+                if len(conteudo) > max_bytes:
+                    raise DriveError(f"O download passou do limite de {max_bytes} bytes.")
+        finally:
+            r.close()
+
+        if not conteudo:
+            raise DriveError(f"O arquivo {file_id} veio vazio do Drive.")
+
+        _log(f"baixado do Drive: {meta.get('name')} ({len(conteudo)} bytes)")
+        return {
+            "content": bytes(conteudo),
+            "name": meta.get("name") or file_id,
+            "mime": meta.get("mimeType") or "",
+            "size": len(conteudo),
+            "id": file_id,
+            "link": meta.get("webViewLink"),
         }

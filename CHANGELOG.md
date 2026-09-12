@@ -7,6 +7,108 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [Não publicado]
+
+### 🖼️ Imagem saindo daqui sem base64 no chat
+
+Faltava o caminho de volta: `download_media`, `view_media` e `archive_to_drive` já evitavam
+o base64 na **entrada**, mas uma imagem criada pelo modelo ainda saía por `send_image_base64`,
+custando o arquivo inteiro dentro da conversa. Duas rotas novas fecham isso.
+
+### ✨ Adicionado
+
+- **`send_render(number, svg, caption?, file_name?, width?, height?, background?)`**: o modelo
+  escreve o **SVG** e o servidor rasteriza e envia. O desenho atravessa a conversa como texto
+  (um gráfico de barras dá ~1.200 caracteres, contra ~16.800 do base64 do PNG) e a diferença
+  cresce conforme a imagem ganha detalhe. O PNG fica em `<EVOLUTION_MEDIA_DIR>/render/`, para
+  reenviar sem redesenhar. Rasterização por `cairosvg`, no extra novo `[svg]`
+- **`send_url(number, url, caption?, media_type?, file_name?)`**: envia arquivo que já está na
+  web a partir do link; o download é do servidor e pela conversa passa só a URL. Converte
+  sozinho o link de compartilhamento do Google Drive e do Dropbox no link do arquivo, deduz o
+  tipo pelo `Content-Type` e explica o erro (link privado, 404, arquivo grande demais) em vez
+  de deixar a Evolution falhar de forma opaca. Teto de 16 MB, arquivo em `<EVOLUTION_MEDIA_DIR>/web/`
+- **`rendering.render_svg`** e o módulo **`weblink.py`** (normalização de link, download com teto
+  e recusa de endereço interno)
+- Extra `[svg]` no `pyproject.toml` e `libcairo2` na imagem Docker
+
+### 🔒 Segurança
+
+- `send_url` só busca endereço `http`/`https` público: cada salto de redirecionamento é resolvido
+  e conferido, e IP privado, loopback, link-local ou reservado é recusado. Sem isso um link vindo
+  numa mensagem do WhatsApp faria o servidor buscar coisas na rede interna e devolvê-las ao remetente
+- `render_svg` rasteriza com `unsafe=False`: o SVG não lê arquivo do servidor nem entidade externa
+
+### 📝 Alterado
+
+- `send_image_base64` e `send_image` passam a apontar a alternativa barata na própria descrição,
+  que é o que o modelo lê na hora de escolher a tool
+
+### 🧹 Manutenção do servidor
+
+- **Faxina do `media_dir`**: nada apagava nada, e num container o disco cheio derruba
+  download, envio, transcrição e arquivamento de uma vez, com erros que não falam em disco.
+  Agora a pasta tem prazo (`EVOLUTION_MEDIA_TTL_DAYS`, padrão 30 dias), varrido no máximo
+  uma vez por dia por quem grava, com a tool `cleanup_media(days?, dry_run?)` para adiantar.
+  `.transcripts` nunca é apagado, e o uso de disco aparece em `get_instance_info` e em
+  `GET /instance/status`. Novo módulo `storage.py`
+- **`send_drive_file(number, file_ref? | folder+name, ...)`**: fecha o ciclo do
+  `archive_to_drive`, que era mão única — arquivo guardado no Drive volta ao WhatsApp sem
+  depender da cópia local. `DriveClient` ganhou `download_file`, `get_metadata`,
+  `find_in_folder` e `file_id_from` (aceita id ou link). Continua no escopo `drive.file`:
+  alcança o que este servidor criou, sem escopo restrito nem arquivo público
+
+### 🔧 Infraestrutura
+
+- **CI no GitHub Actions**: pytest em Python 3.10, 3.11 e 3.12 com os extras instalados
+  (incluindo `libcairo2`, para que os testes de rasterização rodem em vez de serem pulados),
+  o servidor MCP subindo e listando as tools, e um job que constrói a imagem Docker e
+  confere que ela rasteriza — dependência de sistema faltando só aparece ali
+- **API REST alinhada com as tools**: `POST /messages/render`, `/messages/url`,
+  `/messages/drive`, `/media/archive`, `/media/view` e `/media/cleanup`. As duas superfícies
+  vinham divergindo em silêncio; um teste agora falha se um envio existir só no MCP
+- Primeiros testes do `http_server.py`, que não tinha nenhum
+
+### 🔒 Segurança
+
+- O token da instância Evolution, commitado em quatro arquivos desde os primeiros commits,
+  foi trocado por placeholder. **Ele continua no histórico do git e válido até ser rotacionado
+  no painel da Evolution** — está registrado no `TODO.md`
+
+### 🧭 Interação: qual tool usar, e o WhatsApp deixando de ficar mudo
+
+- **`instructions` no servidor MCP.** São cinco caminhos para mandar uma imagem, e a
+  regra de escolha estava espalhada pelas descrições ("para X use Y") — regra repetida
+  em cinco lugares funciona enquanto o modelo lê as cinco, e falha calada quando ele
+  escolhe a primeira que serve. Agora ela é dita uma vez, no nível do servidor, e chega
+  antes da escolha
+- **Tools de base64 escondidas por padrão** (`send_image_base64`, `send_document_base64`,
+  `get_media_base64`): tool visível é tool escolhida, e essas são justamente o caminho
+  caro que o resto do projeto existe para evitar. `EVOLUTION_BASE64_TOOLS=1` traz de volta.
+  A superfície cai de 28 para 26 tools (25 sem o `react_to_message`, que entrou junto)
+- **`react_to_message(number, message_id, emoji, from_me?)`**: responder com um sinal em
+  vez de mais uma mensagem. String vazia remove a reação
+- **Sinal de vida do bot "IA:"**: ao ser acionado ele reage com 👀 e liga o "digitando…";
+  ao responder, troca por ✅. Antes disso a conversa ficava parada por dezenas de segundos,
+  sem distinguir "pensando" de "morreu". Falha ao sinalizar nunca impede a resposta.
+  `EVOLUTION_BOT_FEEDBACK=0` desliga
+
+### 🐛 Corrigido
+
+- **Reação nunca mais aciona o bot.** O texto de uma reação é o próprio emoji e, na
+  conversa pessoal, toda mensagem do dono é instrução: um 👍 de Max virava a instrução
+  "👍", e o 👀 do próprio bot teria voltado como novo acionamento. Duas travas: o tipo
+  reação nunca vira instrução (`webhook.summarize_event`) e o id da reação entra na lista
+  de enviados, como o de qualquer envio
+
+### 📚 Documentação
+
+- `ROADMAP.md`, `KNOWN_ISSUES.md`, `NEXT_STEPS.md`, `SUMMARY.md` e `FIXES.md` foram removidos:
+  descreviam o projeto de outubro de 2025, com a biblioteca `evolutionapi` que já saiu, tools
+  que não existem mais e pendências já resolvidas. `TODO.md` foi reescrito com o que é verdade
+  hoje; `README.md` e `CHANGELOG.md` seguem como os documentos vivos
+
+---
+
 ## [1.2.0] - 2026-09-11
 
 ### 🪙 Economia de tokens com Claude

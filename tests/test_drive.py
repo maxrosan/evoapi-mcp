@@ -50,7 +50,8 @@ def drive(tmp_path, monkeypatch):
             if not d.queue:
                 return FakeResponse({})
             item = d.queue.pop(0)
-            return item if isinstance(item, FakeResponse) else FakeResponse(item)
+            # FakeBinary (definido adiante) passa direto: download é corpo, não JSON
+            return item if isinstance(item, (FakeResponse, FakeBinary)) else FakeResponse(item)
         return call
 
     monkeypatch.setattr("evoapi_mcp.drive.requests.get", fake("GET"))
@@ -246,3 +247,156 @@ def test_archive_media_downloads_then_uploads(client, tmp_path, monkeypatch):
 def test_archive_media_without_credentials(client):
     with pytest.raises(DriveError, match="não configurado"):
         client.archive_media("MSG1", folder="X")
+
+
+# ---------------------------------------------------------------------------
+# download: o caminho de volta, para reenviar o que já foi arquivado
+# ---------------------------------------------------------------------------
+
+class FakeBinary:
+    """Resposta de download: streaming de bytes, não JSON."""
+
+    def __init__(self, data: bytes, status: int = 200):
+        self._data = data
+        self.status_code = status
+        self.text = ""
+
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self._data), chunk_size):
+            yield self._data[i:i + chunk_size]
+
+    def close(self):
+        pass
+
+    def json(self):
+        return {}
+
+
+def test_file_id_from_accepts_an_id_or_a_link():
+    assert DriveClient.file_id_from("1AbC_dEf-123") == "1AbC_dEf-123"
+    assert DriveClient.file_id_from(
+        "https://drive.google.com/file/d/1AbC_dEf-123/view?usp=drivesdk"
+    ) == "1AbC_dEf-123"
+    assert DriveClient.file_id_from("https://drive.google.com/uc?id=XYZ9") == "XYZ9"
+
+    with pytest.raises(DriveError, match="Não achei o id"):
+        DriveClient.file_id_from("https://drive.google.com/drive/my-drive")
+    with pytest.raises(DriveError, match="Informe o id"):
+        DriveClient.file_id_from("")
+
+
+def test_download_file_reads_metadata_then_content(drive):
+    drive.queue.append({"id": "F1", "name": "boleto.pdf", "mimeType": "application/pdf",
+                        "size": "8", "webViewLink": "https://drive.google.com/file/d/F1/view"})
+    drive.queue.append(FakeBinary(b"%PDF-1.4"))
+
+    out = drive.download_file("F1")
+
+    assert out["content"] == b"%PDF-1.4"
+    assert out["name"] == "boleto.pdf"
+    assert out["mime"] == "application/pdf"
+    assert out["size"] == 8
+    # o segundo GET pede o conteúdo, não os metadados
+    assert drive.calls[-1]["params"]["alt"] == "media"
+
+
+def test_download_file_refuses_something_too_big(drive):
+    drive.queue.append({"id": "F1", "name": "filme.mp4", "mimeType": "video/mp4",
+                        "size": str(200 * 1024 * 1024)})
+    with pytest.raises(DriveError, match="acima do limite"):
+        drive.download_file("F1")
+
+
+def test_download_file_stops_a_body_that_lies_about_its_size(drive):
+    drive.queue.append({"id": "F1", "name": "x.bin", "mimeType": "application/octet-stream"})
+    drive.queue.append(FakeBinary(b"x" * 5000))
+    with pytest.raises(DriveError, match="passou do limite"):
+        drive.download_file("F1", max_bytes=1024)
+
+
+def test_find_in_folder_locates_a_file_by_name(drive):
+    drive.queue.append({"files": [{"id": "PASTA", "name": "BOLETO"}]})   # ensure_folder
+    drive.queue.append({"files": [{"id": "F9", "name": "boleto.pdf"}]})  # find_child
+
+    assert drive.find_in_folder("BOLETO", "boleto.pdf") == "F9"
+
+
+def test_find_in_folder_says_what_is_missing(drive):
+    drive.queue.append({"files": [{"id": "PASTA", "name": "BOLETO"}]})
+    drive.queue.append({"files": []})
+
+    with pytest.raises(DriveError, match="não encontrado"):
+        drive.find_in_folder("BOLETO", "sumiu.pdf")
+
+
+# ---------------------------------------------------------------------------
+# send_drive_file: do Drive para o WhatsApp, sem passar pela conversa
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cliente_drive(tmp_path, monkeypatch):
+    """Cliente Evolution simulado cujo DriveClient também é simulado."""
+    from evoapi_mcp.client import EvolutionClient
+
+    c = EvolutionClient(creds(tmp_path, drive_root_id="ROOT"))
+    c.calls = []
+    c._make_request = lambda m, e, data=None, params=None: (
+        c.calls.append({"method": m, "endpoint": e, "data": data}) or {"key": {"id": "S1"}}
+    )
+
+    c.drive.queue = []
+
+    def fake(method):
+        def call(url, **kw):
+            if url.endswith("/token"):
+                return FakeResponse({"access_token": "tok", "expires_in": 3600})
+            if not c.drive.queue:
+                return FakeResponse({})
+            item = c.drive.queue.pop(0)
+            return item if isinstance(item, (FakeResponse, FakeBinary)) else FakeResponse(item)
+        return call
+
+    monkeypatch.setattr("evoapi_mcp.drive.requests.get", fake("GET"))
+    monkeypatch.setattr("evoapi_mcp.drive.requests.post", fake("POST"))
+    return c
+
+
+def test_send_drive_file_by_link(cliente_drive, tmp_path):
+    import base64 as b64
+
+    cliente_drive.drive.queue.append({"id": "F1", "name": "boleto.pdf",
+                                      "mimeType": "application/pdf", "size": "8"})
+    cliente_drive.drive.queue.append(FakeBinary(b"%PDF-1.4"))
+
+    out = cliente_drive.send_drive_file(
+        "5511999999999",
+        file_ref="https://drive.google.com/file/d/F1/view",
+        caption="segue de novo",
+    )
+
+    envio = cliente_drive.calls[-1]
+    assert envio["endpoint"] == "/message/sendMedia/{instanceId}"
+    assert envio["data"]["mediatype"] == "document"
+    assert envio["data"]["fileName"] == "boleto.pdf"
+    assert b64.b64decode(envio["data"]["media"]) == b"%PDF-1.4"
+    assert out["_file"]["drive_id"] == "F1"
+
+    from pathlib import Path
+    assert Path(out["_file"]["path"]).parent == tmp_path / "media" / "drive"
+
+
+def test_send_drive_file_by_folder_and_name(cliente_drive):
+    cliente_drive.drive.queue.append({"files": [{"id": "PASTA", "name": "BOLETO"}]})
+    cliente_drive.drive.queue.append({"files": [{"id": "F9", "name": "conta.png"}]})
+    cliente_drive.drive.queue.append({"id": "F9", "name": "conta.png", "mimeType": "image/png",
+                                      "size": "3"})
+    cliente_drive.drive.queue.append(FakeBinary(b"png"))
+
+    cliente_drive.send_drive_file("5511999999999", folder="BOLETO", name="conta.png")
+
+    assert cliente_drive.calls[-1]["data"]["mediatype"] == "image"
+
+
+def test_send_drive_file_needs_a_reference(cliente_drive):
+    with pytest.raises(DriveError, match="Informe file_ref"):
+        cliente_drive.send_drive_file("5511999999999")
