@@ -31,9 +31,17 @@ def test_every_send_tool_has_an_endpoint(api):
         "/media/cleanup",
     } <= rotas
 
+try:
+    import cairosvg  # noqa: F401
+    TEM_CAIRO = True
+except Exception:  # sem o pacote ou sem a libcairo do sistema (OSError, não ImportError)
+    TEM_CAIRO = False
 
+com_cairo = pytest.mark.skipif(not TEM_CAIRO, reason="cairosvg/libcairo ausente")
+
+
+@com_cairo
 def test_render_endpoint_rasterizes_and_sends(api, client):
-    pytest.importorskip("cairosvg")
     client.responses.append({"key": {"remoteJid": "5511999999999@s.whatsapp.net", "id": "S1"}})
 
     r = api.post("/messages/render", json={
@@ -49,8 +57,8 @@ def test_render_endpoint_rasterizes_and_sends(api, client):
     assert enviado[:4] == b"\x89PNG"
 
 
+@com_cairo
 def test_render_endpoint_reports_a_bad_svg(api):
-    pytest.importorskip("cairosvg")
     r = api.post("/messages/render", json={"number": "5511999999999", "svg": "isto não é svg"})
     assert r.status_code == 422
     assert "SVG" in r.json()["detail"]

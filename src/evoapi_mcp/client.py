@@ -1099,6 +1099,28 @@ class EvolutionClient:
             },
         )
 
+    def react_done(self, chat_jid: str | None, message_id: str | None, from_me: bool = True) -> bool:
+        """Marca uma instrução já tratada reagindo a ela com o emoji configurado.
+
+        É o "checked" da mensagem: Max olha a conversa e vê o que já foi feito sem
+        que nenhuma mensagem de status apareça. Melhor esforço, nunca lança: uma
+        reação que falha não pode desfazer um tratamento que deu certo.
+
+        Args:
+            chat_jid: A conversa onde a instrução está
+            message_id: Id da instrução
+            from_me: A instrução é do dono (sempre, por construção do gatilho)
+        """
+        emoji = (getattr(self.config, "done_reaction", "✅") or "").strip()
+        if not emoji or not chat_jid or not message_id:
+            return False
+        try:
+            self.send_reaction(number=chat_jid, message_id=message_id, emoji=emoji, from_me=from_me)
+            return True
+        except Exception as e:
+            self._log(f"não consegui marcar {message_id} como tratada: {e}", "WARNING")
+            return False
+
     def send_render(
         self,
         number: str,

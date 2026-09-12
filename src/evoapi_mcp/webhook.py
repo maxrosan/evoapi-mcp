@@ -159,6 +159,16 @@ class EventLog:
         tratados = self.store.handled_among(e["message_id"] for e in acionamentos)
         return [e for e in acionamentos if e["message_id"] not in tratados][:limit]
 
+    def trigger(self, message_id: str | None) -> dict[str, Any] | None:
+        """O resumo de um acionamento conhecido, ou None. Só acionamentos: uma
+        mensagem enviada por nós nunca é devolvida aqui, então nunca é marcada."""
+        if not message_id:
+            return None
+        for e in self._eventos:
+            if e.get("trigger") and e.get("message_id") == message_id:
+                return e
+        return None
+
     def is_handled(self, message_id: str) -> bool:
         """True se este acionamento já foi tratado (consulta o armazenamento)."""
         return bool(message_id) and self.store.is_handled(message_id)

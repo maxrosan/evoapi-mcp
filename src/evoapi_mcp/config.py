@@ -146,6 +146,10 @@ class EvolutionConfig(BaseSettings):
         default="",
         description="Número do dono da instância; identifica a conversa dele com ele mesmo"
     )
+    done_reaction: str = Field(
+        default="✅",
+        description="Emoji com que a instrução tratada é marcada. Vazio desliga a marcação"
+    )
 
     @field_validator("transcribe_backend")
     @classmethod

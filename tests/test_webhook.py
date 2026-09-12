@@ -291,3 +291,38 @@ def test_resposta_do_assistente_nao_vira_nova_instrucao():
     log.add(evento_pessoal("Pronto, criei o cartão no Trello", msg_id="RESP1"))
 
     assert log.pending() == []
+
+
+# ---------------------------------------------------------------------------
+# "checked": reação na instrução tratada
+# ---------------------------------------------------------------------------
+
+def test_trigger_devolve_so_acionamentos():
+    log = EventLog(owner_number=DONO)
+    log.add(evento("IA: resuma"))                 # acionamento (id MSG1)
+    log.add(evento("bom dia"))                    # não é
+    assert log.trigger("MSG1")["instruction"] == "resuma"
+    assert log.trigger("inexistente") is None
+    assert log.trigger(None) is None
+
+
+def test_react_done_marca_a_instrucao(client):
+    client.responses.append({})
+    assert client.react_done("120363@g.us", "MSG1") is True
+    chamada = client.calls[-1]
+    assert chamada["endpoint"] == "/message/sendReaction/{instanceId}"
+    assert chamada["data"]["reaction"] == "✅"
+    assert chamada["data"]["key"] == {"remoteJid": "120363@g.us", "fromMe": True, "id": "MSG1"}
+
+
+def test_react_done_desligado_por_emoji_vazio(client):
+    client.config.done_reaction = ""
+    assert client.react_done("120363@g.us", "MSG1") is False
+    assert client.calls == []
+
+
+def test_react_done_nunca_derruba_o_tratamento(client):
+    def falha(data):
+        raise RuntimeError("Evolution fora do ar")
+    client.responses.append(falha)
+    assert client.react_done("120363@g.us", "MSG1") is False   # avisa e segue

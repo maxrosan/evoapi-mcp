@@ -738,15 +738,25 @@ def mark_triggers_handled(message_ids: list[str]) -> str:
     """Marca acionamentos como tratados, para não voltarem em pending_triggers.
 
     Chame depois de responder, mesmo que você tenha decidido não responder: sem isso
-    a mesma instrução reaparece a cada volta do laço.
+    a mesma instrução reaparece a cada volta do laço. A mensagem original recebe a
+    reação configurada (padrão ✅), que é o "checked" visível para Max.
 
     Args:
         message_ids: os ids devolvidos por pending_triggers
     """
     from evoapi_mcp.webhook import EVENTS
 
+    marcados = EVENTS.mark_handled(message_ids)
+    # Deixa o "checked" na própria instrução: quem olha a conversa vê o que já foi
+    # feito. Só em acionamentos de verdade; mensagens nossas nunca passam por aqui.
+    reagidos = 0
+    for mid in message_ids or []:
+        e = EVENTS.trigger(mid)
+        if e and client.react_done(e.get("chat_jid"), mid):
+            reagidos += 1
     return _out({
-        "marcados": EVENTS.mark_handled(message_ids),
+        "marcados": marcados,
+        "marcadas_com_reacao": reagidos,
         "restantes": len(EVENTS.pending(limit=999)),
         "armazenamento": EVENTS.store.describe(),
     })

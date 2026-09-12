@@ -367,3 +367,4 @@ def test_uma_falha_ao_reagir_nao_impede_a_resposta(bot, client):
     client.responses.append({"key": {"id": "ENVIADA0", "remoteJid": "x"}})
 
     assert bot.handle(*par(evento("IA: resuma")))["acao"] == "respondido"
+
