@@ -52,6 +52,8 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ Respostas compactas por padrão (~10x menos tokens que o JSON bruto do WhatsApp)
 - ✅ `download_media` grava o anexo em disco e devolve só caminho + metadados (nunca base64)
 - ✅ `send_file` envia arquivo local sem passar base64 pelo chat
+- ✅ `send_render` desenha a imagem a partir do SVG do modelo: o desenho viaja como texto
+- ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
 - ✅ Extração de texto de PDF/txt (`extract_text=True`) para identificar documentos sem abri-los
 - ✅ Busca textual local em `find_messages`/`get_chat_messages` (só as mensagens que casam voltam)
 - ✅ Limites padrão menores (20 itens) e corte de texto configurável
@@ -141,6 +143,57 @@ por cima chega como texto e é ilegível para o modelo. Para documento que já t
 `download_media(extract_text=True)` continua muito mais barato.
 
 Requer o extra `[image]` (pypdfium2 e Pillow).
+
+### Imagem criada pelo modelo (gráfico, cartão, aviso)
+
+Quando é o próprio modelo que cria a imagem, mandar o PNG em `send_image_base64` custa
+o arquivo inteiro em base64 dentro da conversa. `send_render` inverte a rota: o modelo
+escreve o **SVG**, que é texto, e o servidor rasteriza e envia.
+
+```
+send_render(number="5511999999999", svg="<svg xmlns=...>...</svg>", caption="vendas de setembro")
+```
+
+Um gráfico de barras de 1.159 caracteres de SVG vira um PNG cujo base64 tem 16.780:
+14x mais barato neste caso, e a diferença cresce conforme a imagem ganha detalhe —
+é o conteúdo do arquivo que pesa, não o envio. O PNG fica gravado em
+`<EVOLUTION_MEDIA_DIR>/render/`, então dá para reenviar ou arquivar pelo `path`
+devolvido sem desenhar de novo.
+
+Escreva um SVG completo (com `xmlns` e `width`/`height` na raiz) e use fontes comuns —
+`sans-serif`, `serif`, `monospace` —, porque as fontes disponíveis são as do servidor.
+`width`/`height` redimensionam na rasterização e `background=null` mantém a transparência.
+Para imagem que já existe em arquivo continue usando `send_file`, e para imagem que já
+está na web, `send_image` com a URL (aí quem baixa é a Evolution, e o custo é o do link).
+
+Requer o extra `[svg]` (cairosvg) e, no sistema, a `libcairo2` — já incluída na imagem
+Docker. Sem ela, a tool devolve um erro dizendo o que instalar em vez de quebrar.
+
+### Imagem que já existe em algum lugar
+
+Quando o arquivo já está publicado, o link é tudo que precisa atravessar a conversa:
+
+```
+send_url(number="5511999999999", url="https://drive.google.com/file/d/1AbC.../view", caption="a arte")
+```
+
+O servidor baixa e envia. Link de compartilhamento do **Google Drive** e do **Dropbox**
+é convertido sozinho para o link do arquivo em si — sem isso o download traz a página
+HTML, não a imagem. O tipo (`image`, `video`, `audio`, `document`) sai do `Content-Type`,
+o arquivo fica em `<EVOLUTION_MEDIA_DIR>/web/` e o teto de download é 16 MB.
+
+No Drive, o arquivo precisa estar compartilhado como *qualquer pessoa com o link* —
+o que também significa que qualquer um com o link o vê. Se não estiver, a tool diz isso
+em vez de falhar de forma opaca.
+
+`send_image(number, image_url)` continua sendo o mais barato de todos quando a URL é
+direta: quem baixa é a própria Evolution, e o servidor nem toca no arquivo. `send_url`
+é o atalho para quando isso não dá certo — link de compartilhamento, ou uma URL que a
+Evolution não enxerga.
+
+Por segurança, o download só sai para endereço público: `http`/`https`, e todo salto de
+redirecionamento é conferido, para que o servidor não sirva de ponte para a rede interna
+a partir de um link que chegou pelo WhatsApp.
 
 ### PDFs protegidos por senha
 

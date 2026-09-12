@@ -20,6 +20,7 @@ from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
+from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import (
     clean,
@@ -92,7 +93,12 @@ def send_text_message(number: str, text: str, link_preview: bool = True) -> str:
 
 @mcp.tool()
 def send_image(number: str, image_url: str, caption: str | None = None) -> str:
-    """Envia imagem a partir de URL pública. Para arquivo local use send_file."""
+    """Envia imagem a partir de URL pública: quem baixa é a Evolution.
+
+    É o envio mais barato de todos quando a URL é direta e a Evolution a enxerga. Se
+    falhar, ou se o link for de compartilhamento (Drive, Dropbox), use send_url, que
+    baixa aqui no servidor. Para arquivo local use send_file.
+    """
     return _out(_enviado(
         client.send_media(number=number, media_url=image_url, media_type="image", caption=caption)
     ))
@@ -154,6 +160,89 @@ def send_file(
 
 
 @mcp.tool()
+def send_render(
+    number: str,
+    svg: str,
+    caption: str | None = None,
+    file_name: str = "imagem.png",
+    width: int | None = None,
+    height: int | None = None,
+    background: str | None = "white",
+) -> str:
+    """Desenha uma imagem a partir de SVG e a envia. Use quando VOCÊ for criar a imagem.
+
+    É para gráfico, cartão, aviso, tabela, comparativo, convite: você escreve o SVG
+    e o servidor rasteriza e manda. O desenho viaja como texto (2 a 5 KB num gráfico
+    inteiro); o mesmo PNG em send_image_base64 custaria dezenas de milhares de tokens.
+
+    Escreva um SVG completo, com xmlns e width/height no elemento raiz, e use fontes
+    comuns (sans-serif, serif, monospace): quem desenha é o servidor, com as fontes dele.
+    Para imagem que já existe em arquivo no servidor use send_file, e para imagem que já
+    está na web, send_url (ou send_image, se a URL for direta).
+
+    Args:
+        number: internacional sem '+'
+        svg: o documento SVG
+        caption: legenda opcional
+        file_name: nome exibido no WhatsApp
+        width: largura em pixels (padrão: a do próprio SVG)
+        height: altura em pixels (padrão: proporcional à largura)
+        background: cor de fundo; null mantém a transparência
+    Returns: {ok, id, to, ts, status, file: {path, size, type}}
+    """
+    try:
+        result = client.send_render(
+            number=number, svg=svg, caption=caption, file_name=file_name,
+            width=width, height=height, background=background,
+        )
+    except RenderError as e:
+        return _out({"error": str(e)})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
+def send_url(
+    number: str,
+    url: str,
+    caption: str | None = None,
+    media_type: str | None = None,
+    file_name: str | None = None,
+) -> str:
+    """Envia um arquivo que já está na web, a partir do link. Pela conversa passa só a URL.
+
+    Use para imagem, PDF ou vídeo que já existe em algum lugar público: o servidor
+    baixa e envia, sem base64 no chat. Link de compartilhamento do Google Drive e do
+    Dropbox é convertido sozinho para o link do arquivo — no Drive, ele precisa estar
+    como "qualquer pessoa com o link".
+
+    Para imagem que você mesmo vai desenhar use send_render, e para arquivo que já está
+    no servidor (o `path` de download_media, por exemplo) use send_file.
+
+    Args:
+        number: internacional sem '+'
+        url: endereço público do arquivo
+        caption: legenda opcional
+        media_type: image|video|audio|document (padrão: deduzido do Content-Type)
+        file_name: nome exibido no WhatsApp (padrão: o nome que veio no link)
+    Returns: {ok, id, to, ts, status, file: {path, size, type, url}}
+    """
+    try:
+        result = client.send_url(
+            number=number, url=url, caption=caption,
+            media_type=media_type, file_name=file_name,
+        )
+    except WebLinkError as e:
+        return _out({"error": str(e)})
+    out = _enviado(result)
+    if isinstance(result, dict) and result.get("_file"):
+        out["file"] = result["_file"]
+    return _out(out)
+
+
+@mcp.tool()
 def send_document_base64(
     number: str,
     base64_data: str,
@@ -176,7 +265,11 @@ def send_image_base64(
     file_name: str = "image.png",
     mimetype: str = "image/png",
 ) -> str:
-    """Envia imagem a partir de base64 (sem prefixo data:). Custa muitos tokens: prefira send_file."""
+    """Envia imagem a partir de base64 (sem prefixo data:).
+
+    Custa muitos tokens: prefira send_file (arquivo já no servidor), send_image (URL
+    pública) ou send_render (imagem que você mesmo desenha, em SVG).
+    """
     return _out(_enviado(client.send_media_base64(
         number=number, base64_data=base64_data, media_type="image",
         file_name=file_name, caption=caption or None, mimetype=mimetype,

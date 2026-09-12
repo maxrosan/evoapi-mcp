@@ -25,8 +25,9 @@ from evoapi_mcp.formatters import (
     truncate,
 )
 from evoapi_mcp.drive import DriveClient, DriveError
-from evoapi_mcp.rendering import RenderError, is_renderable, render
+from evoapi_mcp.rendering import RenderError, is_renderable, render, render_svg
 from evoapi_mcp.transcription import TranscriptionError, Transcriber, is_transcribable
+from evoapi_mcp.weblink import fetch as fetch_url
 
 PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
 GROUP_JID_SUFFIX = "@g.us"
@@ -1050,6 +1051,120 @@ class EvolutionClient:
         )
         if isinstance(result, dict):
             result.setdefault("_file", {"path": str(path), "size": len(content), "type": media_type})
+        return result
+
+    def send_render(
+        self,
+        number: str,
+        svg: str,
+        caption: str | None = None,
+        file_name: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        background: str | None = "white",
+    ) -> dict[str, Any]:
+        """Rasteriza um SVG aqui e envia o PNG resultante.
+
+        É o caminho barato para uma imagem criada pelo próprio modelo: o desenho
+        atravessa a conversa como texto (um gráfico dá 2 a 5 KB) e vira pixel só
+        no servidor. O mesmo desenho em base64 custaria dezenas de milhares de
+        tokens, porque é o conteúdo do arquivo que pesa, não o envio.
+
+        O PNG fica gravado em `<media_dir>/render/`, então dá para reenviar ou
+        arquivar depois pelo `path` devolvido, sem desenhar de novo.
+
+        Args:
+            number: Número de destino
+            svg: O documento SVG
+            caption: Legenda opcional
+            file_name: Nome exibido no WhatsApp (padrão: imagem.png)
+            width: Largura em pixels (padrão: a do próprio SVG)
+            height: Altura em pixels (padrão: proporcional à largura)
+            background: Cor de fundo; None mantém a transparência
+
+        Raises:
+            RenderError: SVG inválido, grande demais ou dependência ausente
+        """
+        png = render_svg(svg, width=width, height=height, background=background)
+
+        nome = self._safe_filename(file_name or "imagem.png")
+        if not nome.lower().endswith(".png"):
+            nome = f"{Path(nome).stem or 'imagem'}.png"
+        # Subpasta própria: o que o modelo desenhou não se mistura com o que veio
+        # do WhatsApp, e limpar um não apaga o outro.
+        directory = self.media_dir / "render"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(png)
+        self._log(f"SVG rasterizado em {path} ({len(png)} bytes)")
+
+        return self.send_file(
+            number=number,
+            file_path=str(path),
+            caption=caption,
+            media_type="image",
+            file_name=nome,
+        )
+
+    def send_url(
+        self,
+        number: str,
+        url: str,
+        caption: str | None = None,
+        media_type: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Baixa o arquivo da URL aqui e o envia.
+
+        Atalho para o que já existe na web: pela conversa passa só o link. A
+        diferença para `send_media(media_url=...)`, em que a própria Evolution
+        baixa, é que aqui o download é do servidor — dá para converter link de
+        compartilhamento, deduzir o tipo pelo Content-Type e dizer o que houve
+        quando o link não serve, em vez de uma falha opaca lá na Evolution.
+
+        Args:
+            number: Número de destino
+            url: Endereço público do arquivo
+            caption: Legenda opcional
+            media_type: image/video/audio/document (padrão: deduzido do Content-Type)
+            file_name: Nome exibido no WhatsApp (padrão: o nome que veio no link)
+
+        Raises:
+            WebLinkError: endereço recusado, erro HTTP ou arquivo grande demais
+        """
+        baixado = fetch_url(url, timeout=self.timeout)
+        mime = baixado["mime"]
+        nome = self._safe_filename(file_name or baixado["file_name"])
+
+        if not media_type:
+            raiz = mime.split("/")[0]
+            media_type = (
+                raiz if raiz in ("image", "video", "audio")
+                else _EXT_MEDIA_TYPE.get(Path(nome).suffix.lower(), "document")
+            )
+
+        # Guardado em disco como o resto: reenviar ou arquivar depois não baixa de novo.
+        directory = self.media_dir / "web"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._unique_path(directory, nome)
+        path.write_bytes(baixado["content"])
+        self._log(f"Arquivo de {baixado['url']} salvo em {path} ({len(baixado['content'])} bytes)")
+
+        result = self.send_media_base64(
+            number=number,
+            base64_data=base64.b64encode(baixado["content"]).decode("ascii"),
+            media_type=media_type,
+            file_name=nome,
+            caption=caption,
+            mimetype=mime or mimetypes.guess_type(nome)[0],
+        )
+        if isinstance(result, dict):
+            result.setdefault("_file", {
+                "path": str(path),
+                "size": len(baixado["content"]),
+                "type": media_type,
+                "url": baixado["url"],
+            })
         return result
 
     # =========================================================================

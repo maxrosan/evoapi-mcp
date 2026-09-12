@@ -1,11 +1,21 @@
-"""Documento virando imagem, para o modelo ler o que está escrito."""
+"""Documento virando imagem, para o modelo ler o que está escrito — e o caminho inverso."""
 
 import base64
 import io
+from pathlib import Path
 
 import pytest
 
-from evoapi_mcp.rendering import DEFAULT_MAX_SIDE, MAX_PAGES, RenderError, is_renderable, render
+from evoapi_mcp.rendering import (
+    DEFAULT_MAX_SIDE,
+    MAX_PAGES,
+    MAX_SIDE_OUT,
+    MAX_SVG_CHARS,
+    RenderError,
+    is_renderable,
+    render,
+    render_svg,
+)
 
 pytest.importorskip("PIL")
 pytest.importorskip("pypdfium2")
@@ -191,3 +201,90 @@ def test_render_media_unlocks_then_renders(client):
     })
     out = client.render_media("MSG1", password="1234")
     assert out["pages_rendered"] == 1
+
+
+# ---------------------------------------------------------------------------
+# SVG do modelo virando imagem (send_render)
+# ---------------------------------------------------------------------------
+
+try:
+    import cairosvg  # noqa: F401
+    TEM_CAIRO = True
+except Exception:  # sem o pacote ou sem a libcairo do sistema
+    TEM_CAIRO = False
+
+com_cairo = pytest.mark.skipif(not TEM_CAIRO, reason="cairosvg/libcairo ausente")
+
+SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+    '<rect width="200" height="100" fill="#0a6"/>'
+    '<text x="10" y="55" font-family="sans-serif" font-size="20">Venda: 42</text>'
+    "</svg>"
+)
+
+
+@com_cairo
+def test_render_svg_uses_the_svg_own_size():
+    assert dimensoes(render_svg(SVG)) == (200, 100)
+
+
+@com_cairo
+def test_render_svg_honours_width_and_height():
+    assert dimensoes(render_svg(SVG, width=600, height=300)) == (600, 300)
+
+
+@com_cairo
+def test_render_svg_paints_the_background_and_keeps_it_optional():
+    """Fundo branco por padrão; com background=None o que não foi desenhado fica transparente."""
+    circulo = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">'
+        '<circle cx="30" cy="30" r="20" fill="#0a6"/></svg>'
+    )
+
+    def canto(png):
+        with Image.open(io.BytesIO(png)) as im:
+            return im.mode, im.getpixel((0, 0))
+
+    assert canto(render_svg(circulo, background=None)) == ("RGBA", (0, 0, 0, 0))
+    assert canto(render_svg(circulo)) == ("RGB", (255, 255, 255))
+
+
+@com_cairo
+def test_render_svg_rejects_junk():
+    with pytest.raises(RenderError, match="vazio"):
+        render_svg("   ")
+    with pytest.raises(RenderError, match="não parece um SVG"):
+        render_svg("<html><body>oi</body></html>")
+    with pytest.raises(RenderError, match="acima do limite"):
+        render_svg("<svg" + "x" * MAX_SVG_CHARS)
+    with pytest.raises(RenderError, match="width deve estar entre"):
+        render_svg(SVG, width=MAX_SIDE_OUT + 1)
+    with pytest.raises(RenderError, match="rasterizar"):
+        render_svg('<svg xmlns="http://www.w3.org/2000/svg"><rect</svg>')
+
+
+@com_cairo
+def test_send_render_rasterizes_before_sending(client, config):
+    client.responses.append({"key": {"remoteJid": "5511999999999@s.whatsapp.net", "id": "S1"}})
+
+    out = client.send_render("5511999999999", SVG, caption="o número de hoje", width=400)
+
+    call = client.calls[0]
+    assert call["endpoint"] == "/message/sendMedia/{instanceId}"
+    assert call["data"]["mediatype"] == "image"
+    assert call["data"]["caption"] == "o número de hoje"
+    enviado = base64.b64decode(call["data"]["media"])
+    assert dimensoes(enviado) == (400, 200)
+
+    # o PNG fica no disco do servidor, para reenviar ou arquivar sem redesenhar
+    salvo = Path(out["_file"]["path"])
+    assert salvo.parent == Path(config.media_dir) / "render"
+    assert salvo.read_bytes() == enviado
+
+
+@com_cairo
+def test_send_render_always_writes_a_png(client):
+    client.responses.append({})
+    out = client.send_render("5511999999999", SVG, file_name="grafico")
+    assert Path(out["_file"]["path"]).name == "grafico.png"
+    assert client.calls[0]["data"]["fileName"] == "grafico.png"

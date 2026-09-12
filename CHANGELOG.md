@@ -7,6 +7,44 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [Não publicado]
+
+### 🖼️ Imagem saindo daqui sem base64 no chat
+
+Faltava o caminho de volta: `download_media`, `view_media` e `archive_to_drive` já evitavam
+o base64 na **entrada**, mas uma imagem criada pelo modelo ainda saía por `send_image_base64`,
+custando o arquivo inteiro dentro da conversa. Duas rotas novas fecham isso.
+
+### ✨ Adicionado
+
+- **`send_render(number, svg, caption?, file_name?, width?, height?, background?)`**: o modelo
+  escreve o **SVG** e o servidor rasteriza e envia. O desenho atravessa a conversa como texto
+  (um gráfico de barras dá ~1.200 caracteres, contra ~16.800 do base64 do PNG) e a diferença
+  cresce conforme a imagem ganha detalhe. O PNG fica em `<EVOLUTION_MEDIA_DIR>/render/`, para
+  reenviar sem redesenhar. Rasterização por `cairosvg`, no extra novo `[svg]`
+- **`send_url(number, url, caption?, media_type?, file_name?)`**: envia arquivo que já está na
+  web a partir do link; o download é do servidor e pela conversa passa só a URL. Converte
+  sozinho o link de compartilhamento do Google Drive e do Dropbox no link do arquivo, deduz o
+  tipo pelo `Content-Type` e explica o erro (link privado, 404, arquivo grande demais) em vez
+  de deixar a Evolution falhar de forma opaca. Teto de 16 MB, arquivo em `<EVOLUTION_MEDIA_DIR>/web/`
+- **`rendering.render_svg`** e o módulo **`weblink.py`** (normalização de link, download com teto
+  e recusa de endereço interno)
+- Extra `[svg]` no `pyproject.toml` e `libcairo2` na imagem Docker
+
+### 🔒 Segurança
+
+- `send_url` só busca endereço `http`/`https` público: cada salto de redirecionamento é resolvido
+  e conferido, e IP privado, loopback, link-local ou reservado é recusado. Sem isso um link vindo
+  numa mensagem do WhatsApp faria o servidor buscar coisas na rede interna e devolvê-las ao remetente
+- `render_svg` rasteriza com `unsafe=False`: o SVG não lê arquivo do servidor nem entidade externa
+
+### 📝 Alterado
+
+- `send_image_base64` e `send_image` passam a apontar a alternativa barata na própria descrição,
+  que é o que o modelo lê na hora de escolher a tool
+
+---
+
 ## [1.2.0] - 2026-09-11
 
 ### 🪙 Economia de tokens com Claude
