@@ -45,9 +45,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Extra [pdf]: extração de texto de PDF. Extra [audio]: transcrição local.
 RUN pip install --no-cache-dir --upgrade pip && \
     if [ "$INSTALL_AUDIO" = "true" ]; then \
-        pip install --no-cache-dir ".[pdf,audio,image,svg,bot,db,speech]"; \
+        pip install --no-cache-dir ".[pdf,audio,image,svg,bot,db]"; \
     else \
-        pip install --no-cache-dir ".[pdf,image,svg,bot,db,speech]"; \
+        pip install --no-cache-dir ".[pdf,image,svg,bot,db]"; \
     fi
 
 # Pré-baixar o modelo de transcrição: sem isso cada restart do container

@@ -81,7 +81,7 @@ def test_chave_do_ambiente_conta(tmp_path, edge, monkeypatch):
 def test_sem_nada_fica_off_com_dica(tmp_path, sem_edge):
     s = Speaker(make_config(tmp_path))
     assert not s.available
-    assert "speech" in s.describe()["hint"]
+    assert "edge-tts" in s.describe()["hint"]
 
 
 def test_off_explicito(tmp_path, edge):

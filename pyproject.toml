@@ -12,6 +12,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
+    # Texto para voz sem chave (vozes do Microsoft Edge). Ver speech.py. É dependência
+    # básica, e não extra, porque o Dockerfile do Easypanel tem a lista de extras fixa.
+    "edge-tts>=7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -21,10 +24,6 @@ pdf = [
 ]
 audio = [
     "faster-whisper>=1.0.0",
-]
-# Texto para voz sem chave, com vozes brasileiras (Microsoft Edge). Ver speech.py.
-speech = [
-    "edge-tts>=7.0.0",
 ]
 image = [
     "pypdfium2>=4.30.0",

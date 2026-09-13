@@ -131,8 +131,8 @@ class Speaker:
         if self.backend == "api":
             return "defina EVOLUTION_TTS_API_KEY (ou OPENAI_API_KEY)"
         if self.backend == "edge":
-            return 'instale o extra: pip install -e ".[speech]"'
-        return 'sem chave de API e sem edge-tts; instale o extra [speech] ou defina EVOLUTION_TTS_API_KEY'
+            return "edge-tts não está instalado: pip install edge-tts"
+        return "sem chave de API e sem edge-tts: pip install edge-tts, ou defina EVOLUTION_TTS_API_KEY"
 
     def describe(self) -> dict[str, Any]:
         """Resumo da configuração, sem expor a chave."""

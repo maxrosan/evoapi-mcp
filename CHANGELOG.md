@@ -264,7 +264,9 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
   `auto` prefere a API quando há chave, senão o Edge. Padrão: `pt-BR-FranciscaNeural`
 - O MP3 fica em `media_dir/voz`, e o mesmo texto na mesma voz reaproveita o arquivo;
   a Evolution converte para o formato de nota de voz no envio
-- Novo extra `[speech]` no pyproject e no Dockerfile; `get_instance_info` expõe `speech`
+- `edge-tts` entra como dependência básica, não como extra: o Dockerfile do Easypanel
+  tem a lista de extras fixa e um extra novo nunca chegaria à imagem. `get_instance_info`
+  expõe `speech`
 - Executor: pedidos "em áudio" passam a usar `send_voice`
 - Motivação: "explique para Keilla em áudio" saiu em texto, porque não existia o
   caminho texto → voz. O servidor só transcrevia
