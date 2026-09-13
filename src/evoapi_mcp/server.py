@@ -744,6 +744,7 @@ def pending_triggers(limit: int = 10) -> str:
     Mensagem de terceiro nunca entra aqui. Uma resposta do dono que **cita** uma
     mensagem do assistente também entra, sem precisar de "IA:"; nesse caso
     `respondendo_a` traz o texto citado, para saber a que pergunta ele respondeu.
+    Áudio do dono que começa com "Computador, ..." entra já transcrito, com `voz: true`.
 
     Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
 
@@ -762,6 +763,8 @@ def pending_triggers(limit: int = 10) -> str:
             "instrucao": e.get("instruction"),
             # Quando Max respondeu citando uma mensagem do assistente: o que ele citou.
             "respondendo_a": (e.get("reply_to") or {}).get("text"),
+            # Veio de um áudio: a instrução é a transcrição, nomes podem sair errados.
+            "voz": True if e.get("voice") else None,
         }))
     return _out({"count": len(pendentes), "pendentes": pendentes})
 

@@ -13,7 +13,9 @@ Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execuç�
      `arquivar-financeiro-whatsapp` e siga-a à risca, incluindo as conferências de
      dígitos verificadores. Confirme no WhatsApp onde salvou. Depois
      `mark_triggers_handled`.
-   - Áudio: `transcribe_audio` e trate o conteúdo como a instrução.
+   - Pendência com `voz: true`: a instrução já é a transcrição de um áudio de Max.
+     A transcrição erra nomes próprios ("praquê ele" pode ser "pra Keilla"): use o
+     nome do chat e as últimas mensagens para desfazer a ambiguidade, sem perguntar.
    - Pedido de resposta **em áudio** ("explique em áudio", "manda uma nota de voz"):
      use `send_voice(number, text)`, que gera a voz e envia como nota de voz. Texto
      curto e falado, sem listas nem símbolos: é para ouvir, não para ler.

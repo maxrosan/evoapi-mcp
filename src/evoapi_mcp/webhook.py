@@ -24,6 +24,9 @@ from evoapi_mcp.store import build_store
 
 # Prefixo que, no futuro, aciona o bot. Aqui só é sinalizado.
 TRIGGER_PREFIX = "ia:"
+# Palavra de ativação nos áudios: "Computador, explique para Keilla...". É o "IA:"
+# falado. Só vale no começo da transcrição.
+WAKE_WORD = "computador"
 PREVIEW_CHARS = 80
 MAX_EVENTS = 200
 # A instrução é guardada inteira, e não cortada como a prévia: é o texto que o
@@ -59,6 +62,26 @@ def instruction_of(text: str | None, self_chat: bool = False) -> str | None:
     if not is_trigger(text):
         return None
     return text.lstrip()[len(TRIGGER_PREFIX):].strip()[:MAX_INSTRUCTION] or None
+
+
+def voice_instruction(text: str | None, wake_word: str = WAKE_WORD) -> str | None:
+    """A instrução contida numa transcrição que começa com a palavra de ativação.
+
+    "Computador, explique..." -> "explique..."; "computador explique" também vale.
+    "Computadores estão caros" não vale: a palavra tem de estar inteira. Sem a
+    palavra no começo, devolve None.
+    """
+    texto = (text or "").strip()
+    if not texto:
+        return None
+    palavra = (wake_word or WAKE_WORD).strip().casefold()
+    if not palavra or not texto.casefold().startswith(palavra):
+        return None
+    resto = texto[len(palavra):]
+    if resto and (resto[0].isalnum()):
+        return None  # "computadores", "computadorzinho"
+    resto = resto.lstrip(" ,.:;!?-–—\t\n")
+    return resto.strip()[:MAX_INSTRUCTION] or None
 
 
 def _tail(value: str | None) -> str:
@@ -159,7 +182,14 @@ def summarize_event(payload: Any, owner_number: str | None = None,
         instrucao = instruction_of(texto, self_chat=True)
         aciona = bool(instrucao)
 
+    # Áudio do dono: não dá para saber se é comando sem transcrever, e transcrever
+    # leva segundos. Fica marcado como "voz pendente"; quem recebe o webhook
+    # transcreve em segundo plano e chama EventLog.resolve_voice, que decide.
+    e_audio = tipo == "audio"
+    voz_pendente = bool(minha and e_audio and not aciona and key.get("id"))
+
     resumo.update({
+        "voice_pending": True if voz_pendente else None,
         "reply_to": clean({"id": citada["id"], "text": citada.get("text")}) if citada and aciona else None,
         "message_id": key.get("id"),
         "from_me": minha,
@@ -186,8 +216,38 @@ class EventLog:
         self._eventos: deque[dict[str, Any]] = deque(maxlen=maxlen)
         self.store = store if store is not None else build_store()
         self.owner_number = owner_number if owner_number is not None else os.environ.get("EVOLUTION_OWNER_NUMBER", "")
+        self.wake_word = (os.environ.get("EVOLUTION_WAKE_WORD", "") or WAKE_WORD).strip().casefold()
         self.total = 0
         self.started = datetime.now()
+
+    def resolve_voice(self, message_id: str, text: str | None) -> dict[str, Any] | None:
+        """Decide se um áudio do dono, já transcrito, é instrução.
+
+        Na conversa pessoal todo áudio dele é instrução (a palavra de ativação, se
+        vier, é só tirada). Nas outras conversas só vale se a transcrição começar
+        com a palavra de ativação. Devolve o evento atualizado, ou None se não achou.
+        """
+        alvo = None
+        for e in self._eventos:
+            if e.get("message_id") == message_id and e.get("voice_pending"):
+                alvo = e
+                break
+        if alvo is None:
+            return None
+        alvo.pop("voice_pending", None)
+        transcricao = (text or "").strip()
+        instrucao = voice_instruction(transcricao, self.wake_word)
+        if instrucao is None and alvo.get("self_chat"):
+            instrucao = transcricao[:MAX_INSTRUCTION] or None
+        alvo["transcript"] = transcricao[:PREVIEW_CHARS] or None
+        if instrucao:
+            alvo["instruction"] = instrucao
+            alvo["trigger"] = True
+            alvo["voice"] = True
+            _log(f"comando de voz em {alvo.get('chat')}: {instrucao[:PREVIEW_CHARS]!r} <<< ACIONAMENTO")
+        else:
+            _log(f"áudio do dono em {alvo.get('chat')} sem a palavra de ativação; ignorado")
+        return alvo
 
     def pending(self, limit: int = 10) -> list[dict[str, Any]]:
         """Acionamentos ainda não tratados, do mais antigo para o mais novo."""

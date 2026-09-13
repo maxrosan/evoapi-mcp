@@ -386,3 +386,109 @@ def test_contextinfo_no_topo_de_data_tambem_vale():
     r = log.add(e)
     assert r["trigger"] is True
     assert r["reply_to"]["text"] == "Confirma?"
+
+
+# ---------------------------------------------------------------------------
+# comando de voz: áudio do dono que começa com a palavra de ativação
+# ---------------------------------------------------------------------------
+
+from evoapi_mcp.webhook import voice_instruction  # noqa: E402
+
+
+def audio(from_me=True, jid=KEILLA, msg_id="A1"):
+    e = evento(None, from_me=from_me, jid=jid, tipo="audioMessage")
+    e["data"]["key"]["id"] = msg_id
+    e["data"]["message"] = {"audioMessage": {"mimetype": "audio/ogg; codecs=opus", "seconds": 4, "ptt": True}}
+    return e
+
+
+@pytest.mark.parametrize("texto,esperado", [
+    ("Computador, explique pra Keilla o que é Bambu Lab A1", "explique pra Keilla o que é Bambu Lab A1"),
+    ("computador explique isso", "explique isso"),
+    ("COMPUTADOR: manda o boleto", "manda o boleto"),
+    ("Computador.", None),
+    ("Computadores estão caros", None),
+    ("Ei computador, faça", None),
+    ("", None),
+    (None, None),
+])
+def test_voice_instruction(texto, esperado):
+    assert voice_instruction(texto) == esperado
+
+
+def test_palavra_de_ativacao_configuravel():
+    assert voice_instruction("Jarvis, apaga a luz", wake_word="jarvis") == "apaga a luz"
+    assert voice_instruction("Computador, apaga a luz", wake_word="jarvis") is None
+
+
+def test_audio_do_dono_fica_pendente_de_voz_sem_acionar():
+    log = EventLog(owner_number="5584999290327")
+    r = log.add(audio())
+    assert r.get("trigger") is None
+    assert r["voice_pending"] is True
+    assert log.pending() == []
+
+
+def test_audio_de_terceiro_nao_fica_pendente():
+    log = EventLog(owner_number="5584999290327")
+    r = log.add(audio(from_me=False))
+    assert r.get("voice_pending") is None
+
+
+def test_resolve_voice_com_palavra_vira_acionamento():
+    log = EventLog(owner_number="5584999290327")
+    log.add(audio())
+    e = log.resolve_voice("A1", "Computador, explique praquê ele o que é bambu lab A1")
+    assert e["trigger"] is True
+    assert e["voice"] is True
+    assert e["instruction"] == "explique praquê ele o que é bambu lab A1"
+    assert e.get("voice_pending") is None
+    assert log.pending()[0]["message_id"] == "A1"
+
+
+def test_resolve_voice_sem_palavra_em_chat_de_terceiro_nao_aciona():
+    log = EventLog(owner_number="5584999290327")
+    log.add(audio())
+    e = log.resolve_voice("A1", "oi Keilla, depois te ligo")
+    assert e.get("trigger") is None
+    assert e["transcript"] == "oi Keilla, depois te ligo"
+    assert log.pending() == []
+
+
+def test_audio_na_conversa_pessoal_e_instrucao_mesmo_sem_palavra():
+    log = EventLog(owner_number="5584999290327")
+    e = audio(jid="110818863673433@lid", msg_id="A2")
+    e["data"]["key"]["remoteJidAlt"] = "5584999290327@s.whatsapp.net"
+    r = log.add(e)
+    assert r["voice_pending"] is True
+    res = log.resolve_voice("A2", "manda o resumo das notas de agosto")
+    assert res["trigger"] is True
+    assert res["instruction"] == "manda o resumo das notas de agosto"
+
+
+def test_audio_na_conversa_pessoal_tira_a_palavra_se_vier():
+    log = EventLog(owner_number="5584999290327")
+    e = audio(jid="110818863673433@lid", msg_id="A3")
+    e["data"]["key"]["remoteJidAlt"] = "5584999290327@s.whatsapp.net"
+    log.add(e)
+    assert log.resolve_voice("A3", "Computador, manda o resumo")["instruction"] == "manda o resumo"
+
+
+def test_resolve_voice_com_transcricao_vazia_nao_aciona():
+    log = EventLog(owner_number="5584999290327")
+    log.add(audio())
+    e = log.resolve_voice("A1", None)
+    assert e.get("trigger") is None
+    assert log.pending() == []
+
+
+def test_resolve_voice_de_id_desconhecido_devolve_none():
+    log = EventLog(owner_number="5584999290327")
+    assert log.resolve_voice("NAO_EXISTE", "Computador, oi") is None
+
+
+def test_resolve_voice_so_uma_vez():
+    log = EventLog(owner_number="5584999290327")
+    log.add(audio())
+    log.resolve_voice("A1", "Computador, faça")
+    assert log.resolve_voice("A1", "Computador, faça de novo") is None

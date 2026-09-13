@@ -12,7 +12,8 @@ endereços por causa da migração para LID: `110818863673433@lid` (mensagens no
 `558499290327@s.whatsapp.net` (antigas).
 
 - Na conversa pessoal, toda mensagem dele é uma instrução.
-- Nas outras conversas, só o que começa com "IA:" é instrução.
+- Nas outras conversas, só o que começa com "IA:" é instrução, ou um áudio dele
+  que comece com "Computador, ...".
 - `pending_triggers` já aplica esse filtro. Trate só o que ele devolve.
 
 ## Regras que não se quebram

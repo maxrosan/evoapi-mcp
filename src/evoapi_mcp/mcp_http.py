@@ -20,6 +20,8 @@ Variáveis de ambiente:
                               0 desliga. Exige EVOLUTION_OWNER_NUMBER.
     EVOLUTION_WATCHDOG_COOLDOWN_MINUTES
                               intervalo mínimo entre avisos (padrão 60).
+    EVOLUTION_WAKE_WORD       palavra que abre um comando de voz (padrão "computador").
+                              Exige backend de transcrição.
 
 Uso:
     python -m evoapi_mcp.mcp_http
@@ -96,6 +98,25 @@ def build_app(token: str):
         print("Vigia desligado (EVOLUTION_WATCHDOG_MINUTES=0).", file=sys.stderr)
     eventos.watchdog = watchdog
 
+    # Comando de voz: áudio do dono é transcrito em segundo plano e, se começar
+    # com a palavra de ativação ("Computador, ..."), vira instrução na fila.
+    from evoapi_mcp.server import client as evolution_client
+
+    voz = None
+    if evolution_client.transcriber.available:
+        voz = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voz")
+        print(f"Comando de voz ligado: palavra de ativação '{eventos.wake_word}'", file=sys.stderr)
+    else:
+        print("Comando de voz desligado: sem backend de transcrição.", file=sys.stderr)
+
+    def transcrever(message_id):
+        try:
+            resultado = evolution_client.transcribe_message(message_id, max_chars=0)
+            eventos.resolve_voice(message_id, resultado.get("text"))
+        except Exception as e:  # nunca deixar a thread morrer calada
+            print(f"[ERROR] Voz: falha ao transcrever {message_id}: {e}", file=sys.stderr)
+            eventos.resolve_voice(message_id, None)
+
     def processar(payload, resumo):
         """Roda fora do ciclo da requisição: a Evolution só quer o 200 rápido."""
         try:
@@ -155,6 +176,8 @@ def build_app(token: str):
                     except ValueError:
                         payload = {"event": "?", "erro": "corpo inválido"}
                     resumo = eventos.add(payload)
+                    if voz is not None and resumo.get("voice_pending"):
+                        voz.submit(transcrever, resumo["message_id"])
                     if bot is not None and resumo.get("trigger"):
                         executor.submit(processar, payload, resumo)
                     # A Evolution só quer um 200; qualquer outra coisa vira reenvio.

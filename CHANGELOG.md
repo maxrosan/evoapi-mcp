@@ -254,6 +254,20 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🎙️ Comando de voz: "Computador, ..."
+
+- Áudio de Max passa a ser transcrito em segundo plano assim que chega pelo webhook.
+  Nas conversas com terceiros, se a transcrição começar com a palavra de ativação
+  (`EVOLUTION_WAKE_WORD`, padrão "computador"), vira instrução na fila, já em texto,
+  com `voz: true`. É o "IA:" falado
+- Na conversa pessoal todo áudio dele já era para ser instrução, mas não era: sem texto,
+  o filtro deixava passar. Agora entra, com a palavra de ativação tirada se vier
+- "Computadores estão caros" não aciona: a palavra tem de estar inteira e no começo.
+  Áudio de terceiro nunca é transcrito. Sem backend de transcrição o recurso fica
+  desligado e diz isso na subida
+- Executor: pendência com `voz: true` pode ter nome próprio errado na transcrição
+  ("praquê ele" por "pra Keilla"); ele usa o chat e o contexto para desfazer
+
 ### 🗣️ Texto para voz: `send_voice`
 
 - Nova tool `send_voice(number, text, voice=None)`: gera a fala e envia como **nota de
