@@ -548,3 +548,132 @@ def test_citacao_de_imagem_sem_nome_tem_tipo_e_mime():
     e["data"]["key"]["id"] = "R10"
     r = log.add(e)
     assert r["reply_to"] == {"id": "IMG1", "type": "image", "mime": "image/jpeg"}
+
+
+# ---------------------------------------------------------------------------
+# contexto: anexos do dono enviados perto da instrução, sem citação
+# ---------------------------------------------------------------------------
+
+PESSOAL_LID = "110818863673433@lid"
+PESSOAL_NUM = "558499290327@s.whatsapp.net"
+
+
+def _imagem(msg_id, jid=PESSOAL_LID, from_me=True, legenda=None):
+    e = evento(None, from_me=from_me, jid=jid, tipo="imageMessage")
+    e["data"]["key"]["id"] = msg_id
+    if jid == PESSOAL_LID:
+        e["data"]["key"]["remoteJidAlt"] = "5584999290327@s.whatsapp.net"
+    img = {"mimetype": "image/jpeg"}
+    if legenda:
+        img["caption"] = legenda
+    e["data"]["message"] = {"imageMessage": img}
+    return e
+
+
+def _texto(msg_id, texto, jid=PESSOAL_LID):
+    e = evento(texto, jid=jid)
+    e["data"]["key"]["id"] = msg_id
+    if jid == PESSOAL_LID:
+        e["data"]["key"]["remoteJidAlt"] = "5584999290327@s.whatsapp.net"
+    return e
+
+
+@pytest.fixture
+def relogio(monkeypatch):
+    class R:
+        t = 1_000_000.0
+
+        def __call__(self):
+            return self.t
+
+    r = R()
+    monkeypatch.setattr("evoapi_mcp.webhook.time.time", r)
+    return r
+
+
+def test_foto_sem_legenda_nao_e_instrucao_mas_vira_contexto(relogio):
+    log = EventLog(owner_number="5584999290327")
+    foto = log.add(_imagem("IMG1"))
+    assert foto.get("trigger") is None
+    assert foto["type"] == "image"
+    assert foto["mime"] == "image/jpeg"
+
+    relogio.t += 20
+    log.add(_texto("T1", "Bug no NARA. Coloque no Trello. O coordenador quer saber o que é esse ponto."))
+    pend = log.pending()
+    assert [p["message_id"] for p in pend] == ["T1"]
+    achado = log.context_media(pend[0])
+    assert len(achado) == 1
+    assert {k: achado[0][k] for k in ("id", "tipo", "mime")} == {"id": "IMG1", "tipo": "image", "mime": "image/jpeg"}
+
+
+def test_texto_antes_e_foto_logo_depois_tambem_conta(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_texto("T1", "coloque isso no Trello"))
+    relogio.t += 30
+    log.add(_imagem("IMG1"))
+    assert [a["id"] for a in log.context_media(log.pending()[0])] == ["IMG1"]
+
+
+def test_foto_antiga_fica_de_fora(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("VELHA"))
+    relogio.t += 3600
+    log.add(_texto("T1", "o que é isso?"))
+    assert log.context_media(log.pending()[0]) == []
+
+
+def test_foto_de_terceiro_nao_e_contexto(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("DELA", jid=KEILLA, from_me=False))
+    relogio.t += 10
+    log.add(_texto("T1", "IA: o que é isso?", jid=KEILLA))
+    assert log.context_media(log.pending()[0]) == []
+
+
+def test_foto_de_outra_conversa_nao_e_contexto(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("OUTRA", jid="5511999999999@s.whatsapp.net"))
+    relogio.t += 10
+    log.add(_texto("T1", "coloque isso no Trello"))
+    assert log.context_media(log.pending()[0]) == []
+
+
+def test_conversa_pessoal_com_dois_enderecos_casa(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("IMG1", jid=PESSOAL_LID))
+    relogio.t += 5
+    e = evento("coloque isso no Trello", jid=PESSOAL_NUM)
+    e["data"]["key"]["id"] = "T1"
+    log.add(e)
+    assert [a["id"] for a in log.context_media(log.pending()[0])] == ["IMG1"]
+
+
+def test_mais_proximas_primeiro_e_limite(relogio):
+    log = EventLog(owner_number="5584999290327")
+    for i in range(7):
+        log.add(_imagem(f"IMG{i}"))
+        relogio.t += 10
+    log.add(_texto("T1", "resuma essas fotos"))
+    achados = log.context_media(log.pending()[0])
+    assert len(achados) == 5
+    assert achados[0]["id"] == "IMG6"
+
+
+def test_anexo_citado_nao_repete_em_recentes(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("IMG1"))
+    relogio.t += 5
+    e = _texto("T1", "arquive isso")
+    e["data"]["message"] = {"extendedTextMessage": {"text": "arquive isso", "contextInfo": {
+        "stanzaId": "IMG1", "quotedMessage": {"imageMessage": {"mimetype": "image/jpeg"}}}}}
+    log.add(e)
+    assert log.context_media(log.pending()[0]) == []
+
+
+def test_legenda_da_foto_aparece(relogio):
+    log = EventLog(owner_number="5584999290327")
+    log.add(_imagem("IMG1", jid=KEILLA, legenda="tela do relatório"))
+    relogio.t += 5
+    log.add(_texto("T1", "IA: coloque isso no Trello", jid=KEILLA))
+    assert log.context_media(log.pending()[0])[0]["legenda"] == "tela do relatório"

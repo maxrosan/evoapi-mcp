@@ -60,6 +60,9 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "sonnet")
 CLAUDE_TIMEOUT_S = float(os.environ.get("CLAUDE_TIMEOUT_S", "600") or 600)
 STUCK_RUNS = int(os.environ.get("STUCK_RUNS", "3") or 3)
 BACKOFF_S = float(os.environ.get("BACKOFF_S", "300") or 300)
+# Espera antes de acordar o Claude: Max costuma mandar a foto e o texto em sequência,
+# às vezes o texto primeiro. Sem esta pausa o acionamento sai com metade da conversa.
+SETTLE_SECONDS = float(os.environ.get("SETTLE_SECONDS", "8") or 0)
 CLAUDE_BIN = (
     os.environ.get("CLAUDE_BIN")
     or shutil.which("claude")
@@ -269,6 +272,13 @@ def main() -> int:
             travados_seguidos = 0
             time.sleep(POLL_SECONDS)
             continue
+
+        if SETTLE_SECONDS > 0:
+            time.sleep(SETTLE_SECONDS)
+            try:
+                pend = mcp.pendentes() or pend
+            except Exception:
+                pass
 
         ids_antes = {p.get("id") for p in pend}
         descricao = "; ".join(

@@ -254,6 +254,22 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🖼️ Contexto: a foto que veio antes da instrução
+
+- `pending_triggers` ganha `anexos_recentes`: fotos, vídeos e arquivos que Max mandou
+  na mesma conversa até 10 min antes (ou 90 s depois) da instrução, sem citar. Foto
+  sem legenda não é instrução, então não entrava na fila, e a instrução chegava sem
+  saber a que "isso" se referia. Só anexos do dono; na conversa pessoal os dois
+  endereços (@lid e número) contam como a mesma conversa
+- Eventos de mídia passam a guardar `file` e `mime`
+- Executor: olha os anexos com `view_media` / `download_media` antes de decidir, lê o
+  histórico também na conversa pessoal, só pergunta depois disso e dizendo o que viu,
+  e descreve a imagem no card que criar. Espera 8 s (`SETTLE_SECONDS`) antes de
+  acordar o Claude, para foto e texto mandados em sequência saírem juntos
+- Motivação: Max mandou a foto de uma tela com um ponto circulado e em seguida "Bug no
+  NARA. Coloque no Trello. O coordenador quer saber o que é esse ponto." O executor
+  recebeu só o texto e respondeu que não entendeu
+
 ### ⏰ Mensagens agendadas
 
 - Novas tools `schedule_message(number, text, when, voice)`, `list_scheduled` e

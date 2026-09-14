@@ -805,6 +805,8 @@ def pending_triggers(limit: int = 10) -> str:
     Áudio do dono que começa com "Computador, ..." entra já transcrito, com `voz: true`.
     Se a instrução citou uma mensagem, `citada` traz o id dela e, sendo anexo, tipo,
     nome e mime: "IA: arquive isso em X" citando um PDF aponta para esse PDF.
+    `anexos_recentes` lista os anexos que Max mandou na mesma conversa até 10 min antes
+    (ou 90 s depois) da instrução, sem citar: a foto seguida de "coloque no Trello".
 
     Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
 
@@ -833,6 +835,9 @@ def pending_triggers(limit: int = 10) -> str:
             }) if e.get("reply_to") else None,
             # Veio de um áudio: a instrução é a transcrição, nomes podem sair errados.
             "voz": True if e.get("voice") else None,
+            # Fotos, vídeos e arquivos que Max mandou na mesma conversa logo antes (ou
+            # logo depois) da instrução: é a isso que "isso", "esse ponto" se referem.
+            "anexos_recentes": EVENTS.context_media(e) or None,
         }))
     return _out({"count": len(pendentes), "pendentes": pendentes})
 

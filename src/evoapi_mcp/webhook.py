@@ -32,6 +32,12 @@ MAX_EVENTS = 200
 # A instrução é guardada inteira, e não cortada como a prévia: é o texto que o
 # assistente precisa executar. São palavras do próprio dono, nunca de terceiro.
 MAX_INSTRUCTION = 2000
+# Tipos de anexo que servem de contexto para uma instrução próxima.
+MEDIA_KINDS = ("image", "video", "document", "audio")
+# Janela em que um anexo do dono conta como contexto da instrução: antes dela (ele
+# manda a foto e depois escreve) e um pouco depois (escreve e em seguida manda).
+CONTEXT_BEFORE_S = 600
+CONTEXT_AFTER_S = 90
 # Últimos dígitos comparados para reconhecer o próprio número. Oito porque o WhatsApp
 # escreve o mesmo telefone ora com o nono dígito, ora sem.
 TAIL_DIGITS = 8
@@ -213,6 +219,10 @@ def summarize_event(payload: Any, owner_number: str | None = None,
         "chat_type": ("grupo" if str(jid).endswith("@g.us") else "direto") if jid else None,
         "self_chat": True if propria else None,
         "type": tipo,
+        # Nome e mime do anexo: uma imagem sem legenda não é instrução, mas é o
+        # contexto da instrução que vem logo depois ("coloque isso no Trello").
+        "file": compacta.get("file") if tipo in MEDIA_KINDS else None,
+        "mime": compacta.get("mime") if tipo in MEDIA_KINDS else None,
         "preview": (texto[:PREVIEW_CHARS] + "…") if texto and len(texto) > PREVIEW_CHARS else texto,
         "instruction": instrucao if aciona else None,
         "trigger": True if aciona else None,
@@ -263,6 +273,39 @@ class EventLog:
         else:
             _log(f"áudio do dono em {alvo.get('chat')} sem a palavra de ativação; ignorado")
         return alvo
+
+    def context_media(self, trigger: dict[str, Any], before_s: float = CONTEXT_BEFORE_S,
+                      after_s: float = CONTEXT_AFTER_S, limit: int = 5) -> list[dict[str, Any]]:
+        """Anexos que o dono mandou na mesma conversa, perto da instrução.
+
+        É o que resolve "coloque isso no Trello" escrito logo depois de uma foto: a
+        foto não é instrução (não tem texto), então não entra na fila sozinha, e a
+        instrução chegaria sem saber a que "isso" se refere. Só mensagens do dono;
+        anexo de terceiro continua exigindo citação explícita. A conversa pessoal
+        tem dois endereços (@lid e número), então ali basta ambos serem pessoais.
+        """
+        ts = trigger.get("ts")
+        if ts is None:
+            return []
+        proprio = trigger.get("message_id")
+        citado = (trigger.get("reply_to") or {}).get("id")
+        achados = []
+        for e in self._eventos:
+            if e.get("message_id") in (proprio, citado) or not e.get("from_me"):
+                continue
+            if e.get("type") not in MEDIA_KINDS or e.get("ts") is None:
+                continue
+            mesma = (e.get("chat_jid") == trigger.get("chat_jid")) or (e.get("self_chat") and trigger.get("self_chat"))
+            if not mesma:
+                continue
+            if not (ts - before_s <= e["ts"] <= ts + after_s):
+                continue
+            achados.append(e)
+        achados.sort(key=lambda e: abs(e["ts"] - ts))
+        return [clean({
+            "id": e.get("message_id"), "tipo": e.get("type"), "arquivo": e.get("file"),
+            "mime": e.get("mime"), "legenda": e.get("preview"), "quando": e.get("at"),
+        }) for e in achados[:limit]]
 
     def pending(self, limit: int = 10) -> list[dict[str, Any]]:
         """Acionamentos ainda não tratados, do mais antigo para o mais novo."""

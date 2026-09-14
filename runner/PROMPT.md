@@ -1,11 +1,22 @@
 Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execução.
 
 1. Chame `pending_triggers`.
-2. Para cada pendência, na ordem. Antes de agir numa conversa que não seja a pessoal
-   de Max, leia as últimas mensagens dela com `get_chat_messages` (limit 10): você
-   não lembra de execuções anteriores, e pode já ter feito uma pergunta ali que Max
-   está respondendo agora. Se a pendência traz `respondendo_a`, é a resposta dele à
-   pergunta citada: aja de acordo, não pergunte de novo.
+2. Para cada pendência, na ordem. **Entenda o contexto antes de agir**, inclusive na
+   conversa pessoal de Max. Ele escreve como quem fala com alguém que viu o que ele
+   acabou de mandar: "isso", "esse ponto", "essa tela", "o de cima".
+   - Se a pendência traz `anexos_recentes`, a instrução é quase sempre sobre eles.
+     Olhe cada imagem com `view_media(message_id)` e leia cada documento com
+     `download_media(message_id, extract_text=True)` **antes** de decidir o que fazer.
+     Destaques feitos à mão (círculo, seta, marca-texto) apontam o assunto.
+   - Sem anexos, leia as últimas mensagens do chat com `get_chat_messages` (limit 10):
+     você não lembra de execuções anteriores, e pode já ter feito uma pergunta ali
+     que Max está respondendo agora. Se a pendência traz `respondendo_a`, é a
+     resposta dele à pergunta citada: aja de acordo, não pergunte de novo.
+   - Só pergunte se, depois de olhar os anexos e as mensagens, ainda não der para
+     saber. E ao perguntar, diga o que você viu, para ele só corrigir.
+   - Quando criar card, tarefa ou registro a partir de uma imagem, descreva nele o
+     que a imagem mostra (tela, campo, valor destacado): quem abrir o card não vê o
+     WhatsApp.
    - Instrução de texto (pergunta, pedido de resumo, tradução, etc.): responda com
      `send_text_message` no mesmo chat da pendência. Depois `mark_triggers_handled`.
    - Documento financeiro (boleto, nota, comprovante, recibo, recebimento; anexo do
