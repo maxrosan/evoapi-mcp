@@ -22,6 +22,7 @@ Variáveis de ambiente:
                               intervalo mínimo entre avisos (padrão 60).
     EVOLUTION_WAKE_WORD       palavra que abre um comando de voz (padrão "computador").
                               Exige backend de transcrição.
+    EVOLUTION_TIMEZONE        fuso de Max para mensagens agendadas (padrão America/Fortaleza).
 
 Uso:
     python -m evoapi_mcp.mcp_http
@@ -108,6 +109,21 @@ def build_app(token: str):
         print(f"Comando de voz ligado: palavra de ativação '{eventos.wake_word}'", file=sys.stderr)
     else:
         print("Comando de voz desligado: sem backend de transcrição.", file=sys.stderr)
+
+    # Agenda: mensagens marcadas para mais tarde ficam no banco e saem daqui,
+    # que é o único processo que está sempre de pé.
+    from evoapi_mcp.scheduler import Scheduler
+    from evoapi_mcp.server import config as evolution_config
+
+    agenda = Scheduler(
+        store=eventos.store,
+        send_text=lambda chat, texto: evolution_client.send_text(number=chat, text=texto, link_preview=False),
+        send_voice=(lambda chat, texto: evolution_client.send_voice(number=chat, text=texto))
+        if evolution_client.speaker.available else None,
+        tz=evolution_config.timezone,
+    )
+    agenda.start()
+    eventos.scheduler = agenda
 
     def transcrever(message_id):
         try:

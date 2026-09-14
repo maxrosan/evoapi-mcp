@@ -254,6 +254,22 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### ⏰ Mensagens agendadas
+
+- Novas tools `schedule_message(number, text, when, voice)`, `list_scheduled` e
+  `cancel_scheduled(id)`. O pedido fica na tabela `scheduled_messages` do mesmo
+  Postgres, e uma thread do servidor (`scheduler.py`) envia o que venceu a cada 30 s,
+  em texto ou em nota de voz. Sobrevive a restart e deploy
+- `when` aceita "AAAA-MM-DD HH:MM" no fuso de Max (`EVOLUTION_TIMEZONE`, padrão
+  America/Fortaleza), ISO com deslocamento, ou só "HH:MM" (hoje, ou amanhã se já
+  passou). Passado é recusado
+- A mensagem enviada é marcada como tratada: na conversa pessoal ela voltaria como
+  instrução. Falha de envio fica registrada com o erro e não é repetida
+- Executor: cada acionamento passa a começar com a data e hora atuais no fuso de Max,
+  porque a sessão nasce sem relógio e "amanhã às 9h" precisava de referência
+- Motivação: Max perguntou se podia pedir pelo WhatsApp para agendar uma mensagem. O
+  executor não tem memória entre acionamentos; o servidor e o banco têm
+
 ### 🎙️ Comando de voz: "Computador, ..."
 
 - Áudio de Max passa a ser transcrito em segundo plano assim que chega pelo webhook.

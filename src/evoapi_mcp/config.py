@@ -25,6 +25,7 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_TRANSCRIBE_API_URL: endpoint compatível com a API da OpenAI
     - EVOLUTION_TRANSCRIBE_API_KEY: chave da API (ou use OPENAI_API_KEY / GROQ_API_KEY)
     - EVOLUTION_TRANSCRIBE_MODEL: modelo (padrão: whisper-1 na API, small no local)
+    - EVOLUTION_TIMEZONE: fuso de Max (padrão America/Fortaleza), usado nos agendamentos
     - EVOLUTION_TTS_BACKEND / _VOICE / _API_URL / _API_KEY / _MODEL: texto para voz
       (ver speech.py). Sem nada configurado usa edge-tts, se instalado
     - EVOLUTION_TRANSCRIBE_LANGUAGE: idioma dos áudios, ex: pt (padrão: detectar)
@@ -106,6 +107,10 @@ class EvolutionConfig(BaseSettings):
         description="Timeout da transcrição em segundos",
         ge=10,
         le=1800
+    )
+    timezone: str = Field(
+        default="America/Fortaleza",
+        description="Fuso horário de Max, para horários sem deslocamento e para exibição"
     )
     tts_backend: str = Field(
         default="auto",

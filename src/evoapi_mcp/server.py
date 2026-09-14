@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.speech import SpeechError
+from evoapi_mcp.scheduler import ScheduleError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.storage import sweep, usage
@@ -214,6 +215,61 @@ def send_voice(number: str, text: str, voice: str | None = None) -> str:
     if isinstance(result, dict) and result.get("_voice"):
         out["voice"] = result["_voice"]
     return _out(out)
+
+
+def _agenda():
+    from evoapi_mcp.webhook import EVENTS
+    agenda = getattr(EVENTS, "scheduler", None)
+    if agenda is None:
+        raise ScheduleError("agenda não está ativa neste servidor")
+    return agenda
+
+
+@mcp.tool()
+def schedule_message(number: str, text: str, when: str, voice: bool = False) -> str:
+    """Agenda uma mensagem para ser enviada mais tarde pelo servidor, mesmo sem ninguém acordado.
+
+    O envio é feito pelo próprio servidor na hora marcada. Use quando pedirem
+    "manda X para fulano amanhã às 9h", "me lembra às 18h de Y". Converta a hora
+    pedida para o formato abaixo usando a data e hora atuais que você recebeu.
+
+    Args:
+        number: internacional sem '+', ou o jid da conversa
+        text: o que enviar
+        when: "AAAA-MM-DD HH:MM" no fuso de Max, ou só "HH:MM" (hoje, ou amanhã se já passou).
+              Aceita ISO com deslocamento. Não aceita o passado
+        voice: True envia como nota de voz em vez de texto
+    Returns: {id, chat, quando, tipo, texto, status}
+    """
+    try:
+        return _out(_agenda().schedule(number, text, when, voice=voice))
+    except ScheduleError as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def list_scheduled(limit: int = 50) -> str:
+    """Lista as mensagens agendadas ainda não enviadas, da mais próxima para a mais distante.
+
+    Returns: {count, agendadas: [{id, chat, quando, tipo, texto}]}
+    """
+    try:
+        itens = _agenda().pending(limit=limit)
+    except ScheduleError as e:
+        return _out({"error": str(e)})
+    return _out({"count": len(itens), "agendadas": itens})
+
+
+@mcp.tool()
+def cancel_scheduled(id: int) -> str:
+    """Cancela uma mensagem agendada pelo id (veja list_scheduled). Só o que ainda não foi enviado.
+
+    Returns: {cancelada: bool}
+    """
+    try:
+        return _out({"id": id, "cancelada": _agenda().cancel(id)})
+    except ScheduleError as e:
+        return _out({"error": str(e)})
 
 
 @mcp.tool()
@@ -727,6 +783,8 @@ def get_instance_info(full: bool = False) -> str:
     info["dono_configurado"] = bool(EVENTS.owner_number)
     vigia = getattr(EVENTS, "watchdog", None)
     info["vigia"] = vigia.describe() if vigia else {"ativo": False}
+    agenda = getattr(EVENTS, "scheduler", None)
+    info["agenda"] = agenda.describe() if agenda else {"ativa": False}
     return _out(info)
 
 

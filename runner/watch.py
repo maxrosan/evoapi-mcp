@@ -198,7 +198,15 @@ def escrever_mcp_config() -> Path:
 
 def acordar_claude() -> dict:
     """Roda `claude -p` uma vez. Devolve o resumo do resultado."""
-    prompt = (AQUI / "PROMPT.md").read_text(encoding="utf-8")
+    # A sessão nasce sem relógio: sem esta linha, "amanhã às 9h" não tem referência.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    fuso = os.environ.get("TIMEZONE", "America/Fortaleza")
+    agora = datetime.now(ZoneInfo(fuso))
+    dias = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+    cabecalho = f"Agora: {dias[agora.weekday()]}-feira, {agora.strftime('%d/%m/%Y %H:%M')} (fuso {fuso}).\n\n"
+    prompt = cabecalho + (AQUI / "PROMPT.md").read_text(encoding="utf-8")
     permitidas = BASE_TOOLS + [f"mcp__{nome}" for nome in EXTRA_MCP_SERVERS]
     cmd = [
         CLAUDE_BIN, "-p", prompt,

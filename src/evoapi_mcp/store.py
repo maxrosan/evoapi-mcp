@@ -15,17 +15,37 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 TABLE = "processed_triggers"
+SCHEDULE_TABLE = "scheduled_messages"
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
     message_id  TEXT PRIMARY KEY,
     chat        TEXT,
     instruction TEXT,
     handled_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-)
+);
+CREATE TABLE IF NOT EXISTS {SCHEDULE_TABLE} (
+    id          BIGSERIAL PRIMARY KEY,
+    chat        TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'text',
+    send_at     TIMESTAMPTZ NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at     TIMESTAMPTZ,
+    message_id  TEXT,
+    error       TEXT
+);
+CREATE INDEX IF NOT EXISTS {SCHEDULE_TABLE}_due ON {SCHEDULE_TABLE} (send_at) WHERE status = 'pending'
 """
+_SCHEDULE_COLS = "id, chat, text, kind, send_at, status, created_at, sent_at, message_id, error"
+
+
+def _scheduled_row(row: tuple) -> dict[str, Any]:
+    return dict(zip(_SCHEDULE_COLS.split(", "), row))
 
 
 def _log(message: str, level: str = "INFO") -> None:
@@ -39,9 +59,49 @@ class MemoryStore:
 
     def __init__(self) -> None:
         self._ids: set[str] = set()
+        self._agenda: dict[int, dict[str, Any]] = {}
+        self._proximo = 1
 
     @property
     def available(self) -> bool:
+        return True
+
+    # ------------------------------------------------------------ agendadas
+
+    def schedule(self, chat: str, text: str, send_at: datetime, kind: str = "text") -> int:
+        sid = self._proximo
+        self._proximo += 1
+        self._agenda[sid] = {
+            "id": sid, "chat": chat, "text": text, "kind": kind, "send_at": send_at,
+            "status": "pending", "created_at": datetime.now(timezone.utc),
+            "sent_at": None, "message_id": None, "error": None,
+        }
+        return sid
+
+    def due(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]:
+        itens = [i for i in self._agenda.values() if i["status"] == "pending" and i["send_at"] <= now]
+        return sorted(itens, key=lambda i: i["send_at"])[:limit]
+
+    def pending_scheduled(self, limit: int = 50) -> list[dict[str, Any]]:
+        itens = [i for i in self._agenda.values() if i["status"] == "pending"]
+        return sorted(itens, key=lambda i: i["send_at"])[:limit]
+
+    def mark_scheduled(self, sid: int, status: str, message_id: str | None = None, error: str | None = None) -> bool:
+        item = self._agenda.get(int(sid))
+        if item is None:
+            return False
+        item["status"] = status
+        if status == "sent":
+            item["sent_at"] = datetime.now(timezone.utc)
+        item["message_id"] = message_id
+        item["error"] = error
+        return True
+
+    def cancel_scheduled(self, sid: int) -> bool:
+        item = self._agenda.get(int(sid))
+        if item is None or item["status"] != "pending":
+            return False
+        item["status"] = "cancelled"
         return True
 
     def is_handled(self, message_id: str) -> bool:
@@ -150,6 +210,77 @@ class PostgresStore:
 
     def describe(self) -> dict[str, Any]:
         return {"tipo": self.kind, "conectado": self.available, "tratados": self.count()}
+
+    # ------------------------------------------------------------ agendadas
+
+    def schedule(self, chat: str, text: str, send_at: datetime, kind: str = "text") -> int:
+        if not self.available:
+            raise RuntimeError("banco indisponível")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                f"INSERT INTO {SCHEDULE_TABLE} (chat, text, kind, send_at) VALUES (%s, %s, %s, %s) RETURNING id",
+                (chat, text, kind, send_at),
+            ).fetchone()
+        return int(row[0])
+
+    def due(self, now: datetime, limit: int = 20) -> list[dict[str, Any]]:
+        if not self.available:
+            return []
+        try:
+            with self._pool.connection() as conn:
+                rows = conn.execute(
+                    f"SELECT {_SCHEDULE_COLS} FROM {SCHEDULE_TABLE}"
+                    " WHERE status = 'pending' AND send_at <= %s ORDER BY send_at LIMIT %s",
+                    (now, limit),
+                ).fetchall()
+            return [_scheduled_row(r) for r in rows]
+        except Exception as e:
+            _log(f"falha ao ler agendadas: {e}", "ERROR")
+            return []
+
+    def pending_scheduled(self, limit: int = 50) -> list[dict[str, Any]]:
+        if not self.available:
+            return []
+        try:
+            with self._pool.connection() as conn:
+                rows = conn.execute(
+                    f"SELECT {_SCHEDULE_COLS} FROM {SCHEDULE_TABLE}"
+                    " WHERE status = 'pending' ORDER BY send_at LIMIT %s",
+                    (limit,),
+                ).fetchall()
+            return [_scheduled_row(r) for r in rows]
+        except Exception as e:
+            _log(f"falha ao listar agendadas: {e}", "ERROR")
+            return []
+
+    def mark_scheduled(self, sid: int, status: str, message_id: str | None = None, error: str | None = None) -> bool:
+        if not self.available:
+            return False
+        try:
+            with self._pool.connection() as conn:
+                cur = conn.execute(
+                    f"UPDATE {SCHEDULE_TABLE} SET status = %s, message_id = %s, error = %s,"
+                    " sent_at = CASE WHEN %s = 'sent' THEN now() ELSE sent_at END WHERE id = %s",
+                    (status, message_id, error, status, int(sid)),
+                )
+                return cur.rowcount > 0
+        except Exception as e:
+            _log(f"falha ao atualizar agendada #{sid}: {e}", "ERROR")
+            return False
+
+    def cancel_scheduled(self, sid: int) -> bool:
+        if not self.available:
+            return False
+        try:
+            with self._pool.connection() as conn:
+                cur = conn.execute(
+                    f"UPDATE {SCHEDULE_TABLE} SET status = 'cancelled' WHERE id = %s AND status = 'pending'",
+                    (int(sid),),
+                )
+                return cur.rowcount > 0
+        except Exception as e:
+            _log(f"falha ao cancelar agendada #{sid}: {e}", "ERROR")
+            return False
 
 
 def build_store(url: str | None = None) -> MemoryStore | PostgresStore:
