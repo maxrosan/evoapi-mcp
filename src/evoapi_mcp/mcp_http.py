@@ -30,6 +30,7 @@ Uso:
 """
 
 import hmac
+import threading
 import json
 import os
 import sys
@@ -124,6 +125,23 @@ def build_app(token: str):
     )
     agenda.start()
     eventos.scheduler = agenda
+
+    # Memória de longo prazo: lembranças no mesmo banco, vetores de um modelo local.
+    # O modelo carrega em segundo plano para a subida não esperar por ele.
+    eventos.memory = None
+    if evolution_config.memory_enabled:
+        from evoapi_mcp.memory import Embedder, MemoryBank
+
+        embedder = Embedder(evolution_config.memory_model)
+        if embedder.available:
+            memoria = MemoryBank(eventos.store, embedder, tz=evolution_config.timezone)
+            eventos.memory = memoria
+            threading.Thread(target=memoria.warm, name="memoria", daemon=True).start()
+            print(f"Memória ligada: modelo {embedder.model}, armazenamento {eventos.store.kind}", file=sys.stderr)
+        else:
+            print("Memória desligada: fastembed não instalado.", file=sys.stderr)
+    else:
+        print("Memória desligada (EVOLUTION_MEMORY_ENABLED=false).", file=sys.stderr)
 
     def transcrever(message_id):
         try:

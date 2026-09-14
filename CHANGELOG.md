@@ -254,6 +254,25 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🧠 Memória de longo prazo (RAG)
+
+- Novas tools `remember(text, kind, source, chat)`, `recall(query, limit, kind)` e
+  `forget(id)`. Dois tipos: `fato` (o que Max mandou lembrar) e `episodio` (o resumo
+  do que foi feito e onde ficou)
+- Busca híbrida em `memory.py`: similaridade de vetores de um modelo multilíngue local
+  (`paraphrase-multilingual-MiniLM-L12-v2` via fastembed/onnxruntime, sem chave) mais
+  coincidência de palavras sem acento. Em sete perguntas de teste em português, só
+  vetores acertou seis; o híbrido, sete, porque nomes próprios e termos exatos pesam
+- Vetores numa coluna `real[]` da tabela `memories`, no mesmo Postgres; a comparação é
+  em memória com numpy. Dispensa pgvector e troca de imagem do banco
+- Texto repetido do mesmo tipo não é gravado de novo. O modelo carrega em segundo plano
+  na subida; `get_instance_info` expõe `memoria`
+- `fastembed` entra como dependência básica. Para o primeiro uso não esperar o download
+  (~220 MB), a imagem pode pré-baixar com `python -c "from evoapi_mcp.memory import preload; preload()"`
+- Executor: chama `recall` antes de agir, grava `fato` quando Max pede para lembrar e
+  `episodio` ao concluir algo. Senhas, códigos de pagamento e mensagens de terceiros
+  nunca vão para a memória
+
 ### 🖼️ Contexto: a foto que veio antes da instrução
 
 - `pending_triggers` ganha `anexos_recentes`: fotos, vídeos e arquivos que Max mandou

@@ -59,6 +59,9 @@ RUN if [ "$INSTALL_AUDIO" = "true" ]; then \
         mkdir -p /opt/models; \
     fi
 
+# Pré-baixar o modelo da memória de longo prazo (fica em /opt/models/fastembed).
+RUN python -c "from evoapi_mcp.memory import preload; preload()"
+
 # =============================================================================
 # Stage 2: Runtime
 # =============================================================================

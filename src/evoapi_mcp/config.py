@@ -112,6 +112,14 @@ class EvolutionConfig(BaseSettings):
         default="America/Fortaleza",
         description="Fuso horário de Max, para horários sem deslocamento e para exibição"
     )
+    memory_enabled: bool = Field(
+        default=True,
+        description="Memória de longo prazo (remember/recall/forget). Exige fastembed"
+    )
+    memory_model: str = Field(
+        default="",
+        description="Modelo de vetores da memória (padrão: paraphrase-multilingual-MiniLM-L12-v2)"
+    )
     tts_backend: str = Field(
         default="auto",
         description="Backend de texto para voz: auto, edge, api ou off"

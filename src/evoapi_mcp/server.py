@@ -20,6 +20,7 @@ from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.speech import SpeechError
 from evoapi_mcp.scheduler import ScheduleError
+from evoapi_mcp.memory import MemoriaError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.storage import sweep, usage
@@ -215,6 +216,72 @@ def send_voice(number: str, text: str, voice: str | None = None) -> str:
     if isinstance(result, dict) and result.get("_voice"):
         out["voice"] = result["_voice"]
     return _out(out)
+
+
+def _memoria():
+    from evoapi_mcp.webhook import EVENTS
+    memoria = getattr(EVENTS, "memory", None)
+    if memoria is None:
+        raise MemoriaError("memória não está ativa neste servidor")
+    return memoria
+
+
+@mcp.tool()
+def remember(text: str, kind: str = "fato", source: str | None = None, chat: str | None = None) -> str:
+    """Guarda uma lembrança de longo prazo, para as próximas sessões saberem.
+
+    Use quando Max disser "lembre que...", "anota que...", e ao terminar uma tarefa,
+    com o resumo do que foi feito. Escreva um fato autossuficiente, com nomes: quem
+    ler depois não tem a conversa. Nunca guarde senhas, códigos de boleto ou PIX,
+    números de documento ou o conteúdo de mensagens de outras pessoas.
+
+    Args:
+        text: a lembrança, até 2000 caracteres
+        kind: "fato" (o que Max mandou lembrar, como as coisas são) ou "episodio"
+              (o que foi feito, quando e onde ficou)
+        source: de onde veio, opcional (ex: "whatsapp", "carga inicial")
+        chat: conversa relacionada, opcional
+    Returns: {id, tipo, texto, quando, duplicada?} — duplicada quando já havia uma igual
+    """
+    try:
+        return _out(_memoria().remember(text, kind=kind, source=source, chat=chat))
+    except MemoriaError as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def recall(query: str, limit: int = 5, kind: str | None = None) -> str:
+    """Busca na memória de longo prazo o que já se sabe sobre um assunto.
+
+    Use no começo de cada tarefa, com a instrução e os nomes que aparecem nela
+    (pessoas, empresas, projetos, quadros do Trello). A busca combina sentido e
+    palavras: inclua os nomes próprios e um sinônimo quando ajudar.
+
+    Args:
+        query: o assunto, em linguagem natural
+        limit: máximo de lembranças (padrão 5, máximo 20)
+        kind: "fato" ou "episodio" para filtrar; vazio traz os dois
+    Returns: {count, lembrancas: [{id, tipo, texto, quando, score}]} — score perto de 1
+             é forte; abaixo de 0.4 é só pista
+    """
+    try:
+        itens = _memoria().recall(query, limit=limit, kind=kind)
+    except MemoriaError as e:
+        return _out({"error": str(e)})
+    return _out({"count": len(itens), "lembrancas": itens})
+
+
+@mcp.tool()
+def forget(id: int) -> str:
+    """Apaga uma lembrança pelo id (veja recall). Use quando Max pedir para esquecer algo
+    ou quando um fato guardado estiver errado.
+
+    Returns: {id, esquecida: bool}
+    """
+    try:
+        return _out({"id": id, "esquecida": _memoria().forget(id)})
+    except MemoriaError as e:
+        return _out({"error": str(e)})
 
 
 def _agenda():
@@ -785,6 +852,8 @@ def get_instance_info(full: bool = False) -> str:
     info["vigia"] = vigia.describe() if vigia else {"ativo": False}
     agenda = getattr(EVENTS, "scheduler", None)
     info["agenda"] = agenda.describe() if agenda else {"ativa": False}
+    memoria = getattr(EVENTS, "memory", None)
+    info["memoria"] = memoria.describe() if memoria else {"ativa": False}
     return _out(info)
 
 

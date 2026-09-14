@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 TABLE = "processed_triggers"
 SCHEDULE_TABLE = "scheduled_messages"
+MEMORY_TABLE = "memories"
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
     message_id  TEXT PRIMARY KEY,
@@ -39,7 +40,16 @@ CREATE TABLE IF NOT EXISTS {SCHEDULE_TABLE} (
     message_id  TEXT,
     error       TEXT
 );
-CREATE INDEX IF NOT EXISTS {SCHEDULE_TABLE}_due ON {SCHEDULE_TABLE} (send_at) WHERE status = 'pending'
+CREATE INDEX IF NOT EXISTS {SCHEDULE_TABLE}_due ON {SCHEDULE_TABLE} (send_at) WHERE status = 'pending';
+CREATE TABLE IF NOT EXISTS {MEMORY_TABLE} (
+    id          BIGSERIAL PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    source      TEXT,
+    chat        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    embedding   REAL[] NOT NULL
+)
 """
 _SCHEDULE_COLS = "id, chat, text, kind, send_at, status, created_at, sent_at, message_id, error"
 
@@ -61,6 +71,8 @@ class MemoryStore:
         self._ids: set[str] = set()
         self._agenda: dict[int, dict[str, Any]] = {}
         self._proximo = 1
+        self._memorias: dict[int, dict[str, Any]] = {}
+        self._proxima_memoria = 1
 
     @property
     def available(self) -> bool:
@@ -103,6 +115,27 @@ class MemoryStore:
             return False
         item["status"] = "cancelled"
         return True
+
+    # ------------------------------------------------------------ memória
+
+    def add_memory(self, kind: str, text: str, source: str | None, chat: str | None,
+                   embedding: list[float]) -> int:
+        mid = self._proxima_memoria
+        self._proxima_memoria += 1
+        self._memorias[mid] = {
+            "id": mid, "kind": kind, "text": text, "source": source, "chat": chat,
+            "created_at": datetime.now(timezone.utc), "embedding": list(embedding),
+        }
+        return mid
+
+    def load_memories(self) -> list[dict[str, Any]]:
+        return [dict(m) for m in sorted(self._memorias.values(), key=lambda m: m["id"])]
+
+    def delete_memory(self, mid: int) -> bool:
+        return self._memorias.pop(int(mid), None) is not None
+
+    def count_memories(self) -> int:
+        return len(self._memorias)
 
     def is_handled(self, message_id: str) -> bool:
         return message_id in self._ids
@@ -281,6 +314,54 @@ class PostgresStore:
         except Exception as e:
             _log(f"falha ao cancelar agendada #{sid}: {e}", "ERROR")
             return False
+
+    # ------------------------------------------------------------ memória
+
+    def add_memory(self, kind: str, text: str, source: str | None, chat: str | None,
+                   embedding: list[float]) -> int:
+        if not self.available:
+            raise RuntimeError("banco indisponível")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                f"INSERT INTO {MEMORY_TABLE} (kind, text, source, chat, embedding)"
+                " VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (kind, text, source, chat, embedding),
+            ).fetchone()
+        return int(row[0])
+
+    def load_memories(self) -> list[dict[str, Any]]:
+        if not self.available:
+            return []
+        try:
+            with self._pool.connection() as conn:
+                rows = conn.execute(
+                    f"SELECT id, kind, text, source, chat, created_at, embedding FROM {MEMORY_TABLE} ORDER BY id"
+                ).fetchall()
+            chaves = ("id", "kind", "text", "source", "chat", "created_at", "embedding")
+            return [dict(zip(chaves, r)) for r in rows]
+        except Exception as e:
+            _log(f"falha ao ler memórias: {e}", "ERROR")
+            return []
+
+    def delete_memory(self, mid: int) -> bool:
+        if not self.available:
+            return False
+        try:
+            with self._pool.connection() as conn:
+                cur = conn.execute(f"DELETE FROM {MEMORY_TABLE} WHERE id = %s", (int(mid),))
+                return cur.rowcount > 0
+        except Exception as e:
+            _log(f"falha ao apagar memória #{mid}: {e}", "ERROR")
+            return False
+
+    def count_memories(self) -> int:
+        if not self.available:
+            return 0
+        try:
+            with self._pool.connection() as conn:
+                return conn.execute(f"SELECT count(*) FROM {MEMORY_TABLE}").fetchone()[0]
+        except Exception:
+            return 0
 
 
 def build_store(url: str | None = None) -> MemoryStore | PostgresStore:

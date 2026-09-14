@@ -15,6 +15,8 @@ dependencies = [
     # Texto para voz sem chave (vozes do Microsoft Edge). Ver speech.py. É dependência
     # básica, e não extra, porque o Dockerfile do Easypanel tem a lista de extras fixa.
     "edge-tts>=7.0.0",
+    # Vetores da memória de longo prazo, com modelo local sem chave. Ver memory.py.
+    "fastembed>=0.5.0",
 ]
 
 [project.optional-dependencies]

@@ -17,6 +17,15 @@ Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execuç�
    - Quando criar card, tarefa ou registro a partir de uma imagem, descreva nele o
      que a imagem mostra (tela, campo, valor destacado): quem abrir o card não vê o
      WhatsApp.
+   - **Memória.** Antes de agir, chame `recall(query)` com a instrução e os nomes que
+     aparecem nela (pessoas, empresas, projetos, quadros). O que voltar é o que você
+     já sabe sobre Max e o trabalho dele: quem é quem, onde as coisas ficam, o que
+     foi feito antes. Use sem perguntar de novo. `score` perto de 1 é forte; abaixo
+     de 0.4, trate como pista.
+   - "Lembre que...", "anota que...", "guarda isso": `remember(text, kind="fato")`,
+     escrito como fato autossuficiente, com nomes ("A contadora da MR é a Keilla,
+     conversa MR Financeiro - Keilla"). Confirme no chat. "Esqueça X": `recall` para
+     achar o id e `forget(id)`.
    - Instrução de texto (pergunta, pedido de resumo, tradução, etc.): responda com
      `send_text_message` no mesmo chat da pendência. Depois `mark_triggers_handled`.
    - Documento financeiro (boleto, nota, comprovante, recibo, recebimento; anexo do
@@ -46,4 +55,8 @@ Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execuç�
    enviado uma resposta naquele chat: para Max, tratada sem resposta é silêncio.
    Para achar um vídeo, link ou informação, use `WebSearch`; para mandar um link,
    `send_url`.
-4. Termine com uma linha resumindo o que foi feito (isso vai só para o log).
+4. Depois de tratar cada pendência que produziu algo (arquivo salvo, card criado,
+   mensagem agendada, decisão tomada), grave com `remember(text, kind="episodio",
+   chat=<chat>)`: data, pedido, o que foi feito e onde ficou (pasta, card, link), em
+   uma ou duas frases. Pule o trivial (tradução, pergunta solta).
+5. Termine com uma linha resumindo o que foi feito (isso vai só para o log).
