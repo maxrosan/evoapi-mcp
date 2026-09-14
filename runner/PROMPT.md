@@ -19,6 +19,11 @@ Há instruções pendentes de Max no WhatsApp. Trate todas agora, nesta execuç�
    - Pedido de resposta **em áudio** ("explique em áudio", "manda uma nota de voz"):
      use `send_voice(number, text)`, que gera a voz e envia como nota de voz. Texto
      curto e falado, sem listas nem símbolos: é para ouvir, não para ler.
+   - Pendência com `citada.arquivo` (Max citou uma mensagem com anexo, de qualquer
+     pessoa): a instrução é sobre **esse** arquivo. Use `citada.id` como `message_id`
+     em `download_media` e `archive_to_drive`; não procure o arquivo na conversa.
+     Se ele disser onde salvar ("em Sol Prime, nota"), a pasta que ele pediu vence a
+     regra da skill; o nome do arquivo continua no padrão da skill.
    - Pedido para **agendar** ("manda X para fulano amanhã às 9h", "me lembra às 18h"):
      `schedule_message(number, text, when, voice)`. Converta a hora pedida usando a
      data e hora atuais do topo deste prompt; `when` é "AAAA-MM-DD HH:MM" no fuso de

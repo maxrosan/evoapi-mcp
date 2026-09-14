@@ -19,7 +19,7 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Callable
 
-from evoapi_mcp.formatters import clean, compact_message, jid_to_number
+from evoapi_mcp.formatters import _MEDIA_TYPES, clean, compact_message, jid_to_number
 from evoapi_mcp.store import build_store
 
 # Prefixo que, no futuro, aciona o bot. Aqui só é sinalizado.
@@ -122,7 +122,17 @@ def quoted_of(dados: dict[str, Any]) -> dict[str, Any] | None:
     texto = citada.get("conversation") or (citada.get("extendedTextMessage") or {}).get("text")
     if not texto:
         texto = next((v.get("caption") for v in citada.values() if isinstance(v, dict) and v.get("caption")), None)
-    return {"id": ctx["stanzaId"], "text": texto, "participant": ctx.get("participant")}
+    # Se a mensagem citada é um anexo, o que importa é o id dela: é por ele que
+    # download_media / archive_to_drive buscam o arquivo.
+    tipo, arquivo, mime = "text", None, None
+    for chave, valor in citada.items():
+        if chave in _MEDIA_TYPES and isinstance(valor, dict):
+            tipo = _MEDIA_TYPES[chave]
+            arquivo = valor.get("fileName") or valor.get("title")
+            mime = valor.get("mimetype")
+            break
+    return {"id": ctx["stanzaId"], "text": texto, "participant": ctx.get("participant"),
+            "type": tipo, "file": arquivo, "mime": mime}
 
 
 def summarize_event(payload: Any, owner_number: str | None = None,
@@ -190,7 +200,12 @@ def summarize_event(payload: Any, owner_number: str | None = None,
 
     resumo.update({
         "voice_pending": True if voz_pendente else None,
-        "reply_to": clean({"id": citada["id"], "text": citada.get("text")}) if citada and aciona else None,
+        # Guardado sempre que há citação, e não só quando aciona: um áudio "Computador,
+        # arquiva isso" citando um PDF só vira acionamento depois da transcrição.
+        "reply_to": clean({
+            "id": citada["id"], "text": citada.get("text"), "type": citada.get("type"),
+            "file": citada.get("file"), "mime": citada.get("mime"),
+        }) if citada else None,
         "message_id": key.get("id"),
         "from_me": minha,
         "chat": jid_to_number(jid) if jid else None,

@@ -803,6 +803,8 @@ def pending_triggers(limit: int = 10) -> str:
     mensagem do assistente também entra, sem precisar de "IA:"; nesse caso
     `respondendo_a` traz o texto citado, para saber a que pergunta ele respondeu.
     Áudio do dono que começa com "Computador, ..." entra já transcrito, com `voz: true`.
+    Se a instrução citou uma mensagem, `citada` traz o id dela e, sendo anexo, tipo,
+    nome e mime: "IA: arquive isso em X" citando um PDF aponta para esse PDF.
 
     Devolve {count, pendentes: [...]} — count 0 significa que não há nada a fazer.
 
@@ -821,6 +823,14 @@ def pending_triggers(limit: int = 10) -> str:
             "instrucao": e.get("instruction"),
             # Quando Max respondeu citando uma mensagem do assistente: o que ele citou.
             "respondendo_a": (e.get("reply_to") or {}).get("text"),
+            # A mensagem citada, quando há: se for anexo, `citada.id` é o message_id
+            # para download_media / archive_to_drive.
+            "citada": clean({
+                "id": (e.get("reply_to") or {}).get("id"),
+                "tipo": (e.get("reply_to") or {}).get("type"),
+                "arquivo": (e.get("reply_to") or {}).get("file"),
+                "mime": (e.get("reply_to") or {}).get("mime"),
+            }) if e.get("reply_to") else None,
             # Veio de um áudio: a instrução é a transcrição, nomes podem sair errados.
             "voz": True if e.get("voice") else None,
         }))

@@ -351,7 +351,7 @@ def test_citacao_de_mensagem_do_assistente_aciona_sem_prefixo():
     r = log.add(evento_citando("um vídeo pronto do YouTube sobre café", "Q1"))
     assert r["trigger"] is True
     assert r["instruction"] == "um vídeo pronto do YouTube sobre café"
-    assert r["reply_to"] == {"id": "Q1", "text": "Pode ser um vídeo qualquer?"}
+    assert r["reply_to"] == {"id": "Q1", "text": "Pode ser um vídeo qualquer?", "type": "text"}
     assert log.pending()[0]["message_id"] == "R1"
 
 
@@ -359,7 +359,7 @@ def test_citacao_de_mensagem_desconhecida_nao_aciona():
     log = EventLog(owner_number="5584999290327")
     r = log.add(evento_citando("um vídeo pronto do YouTube sobre café", "DESCONHECIDA"))
     assert r.get("trigger") is None
-    assert r.get("reply_to") is None
+    assert r["reply_to"]["id"] == "DESCONHECIDA"   # a citação é guardada; só não aciona
 
 
 def test_terceiro_citando_o_assistente_nao_aciona():
@@ -492,3 +492,59 @@ def test_resolve_voice_so_uma_vez():
     log.add(audio())
     log.resolve_voice("A1", "Computador, faça")
     assert log.resolve_voice("A1", "Computador, faça de novo") is None
+
+
+# ---------------------------------------------------------------------------
+# citação de uma mensagem com anexo: a instrução é sobre aquele arquivo
+# ---------------------------------------------------------------------------
+
+def evento_citando_arquivo(texto, msg_id="R9", jid=KEILLA, from_me=True):
+    e = evento(texto, from_me=from_me, jid=jid)
+    e["data"]["key"]["id"] = msg_id
+    e["data"]["message"] = {"extendedTextMessage": {"text": texto, "contextInfo": {
+        "stanzaId": "DOC1", "participant": "558498140038@s.whatsapp.net",
+        "quotedMessage": {"documentMessage": {
+            "fileName": "NF 1234 Econtec.pdf", "mimetype": "application/pdf", "caption": "segue a nota",
+        }},
+    }}}
+    return e
+
+
+def test_ia_citando_pdf_de_terceiro_aponta_para_o_pdf():
+    log = EventLog(owner_number="5584999290327")
+    r = log.add(evento_citando_arquivo("IA: arquive isso em Sol Prime, nota"))
+    assert r["trigger"] is True
+    assert r["instruction"] == "arquive isso em Sol Prime, nota"
+    assert r["reply_to"] == {
+        "id": "DOC1", "text": "segue a nota", "type": "document",
+        "file": "NF 1234 Econtec.pdf", "mime": "application/pdf",
+    }
+
+
+def test_citar_pdf_sem_prefixo_em_chat_de_terceiro_nao_aciona():
+    log = EventLog(owner_number="5584999290327")
+    r = log.add(evento_citando_arquivo("recebi, obrigado"))
+    assert r.get("trigger") is None
+    assert r["reply_to"]["file"] == "NF 1234 Econtec.pdf"
+
+
+def test_audio_citando_pdf_guarda_a_citacao_para_depois_da_transcricao():
+    log = EventLog(owner_number="5584999290327")
+    e = audio(msg_id="A9")
+    e["data"]["contextInfo"] = {"stanzaId": "DOC1", "quotedMessage": {
+        "documentMessage": {"fileName": "boleto.pdf", "mimetype": "application/pdf"}}}
+    r = log.add(e)
+    assert r["voice_pending"] is True
+    assert r["reply_to"]["file"] == "boleto.pdf"
+    res = log.resolve_voice("A9", "Computador, arquiva isso em MR, boleto")
+    assert res["trigger"] is True
+    assert res["reply_to"]["id"] == "DOC1"
+
+
+def test_citacao_de_imagem_sem_nome_tem_tipo_e_mime():
+    log = EventLog(owner_number="5584999290327")
+    e = evento("IA: o que é isso?", jid=KEILLA, extra={"contextInfo": {
+        "stanzaId": "IMG1", "quotedMessage": {"imageMessage": {"mimetype": "image/jpeg"}}}})
+    e["data"]["key"]["id"] = "R10"
+    r = log.add(e)
+    assert r["reply_to"] == {"id": "IMG1", "type": "image", "mime": "image/jpeg"}
