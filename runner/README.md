@@ -54,9 +54,19 @@ do Claude. Ferramentas que ele tentou usar sem permissão aparecem em `negados`.
 
 ## O que o Claude pode fazer
 
-Só as ferramentas do conector `evoapi`, a leitura de skills e de arquivos. Sem
-Bash, sem escrita. Se um dia uma pendência exigir mais (por exemplo, decodificar
-QR Code), o log mostra a negação e a ferramenta pode ser liberada em `watch.py`.
+As ferramentas do conector `evoapi`, busca na web, leitura de skills e de arquivos,
+e os servidores listados em `EXTRA_MCP_SERVERS` no `.env`. Sem Bash, sem escrita.
+Se uma pendência exigir mais, o log mostra a negação em `negados`.
+
+### Conectores da conta (Trello, Gmail, Agenda, Drive)
+
+Os conectores ligados na sua conta claude.ai ficam disponíveis ao Claude Code
+logado, com o prefixo `claude_ai_<Nome>`. Para o executor usá-los, liste-os em
+`EXTRA_MCP_SERVERS`, por exemplo `claude_ai_Trello,claude_ai_Gmail`, e reinicie a
+tarefa. Cada servidor extra acrescenta as descrições das ferramentas dele ao
+contexto de cada acionamento, cerca de um centavo por execução, então liste só
+o que o WhatsApp realmente precisa. Servidores locais cadastrados com
+`claude mcp add` entram pelo próprio nome.
 
 ## Quando algo trava
 

@@ -65,6 +65,13 @@ CLAUDE_BIN = (
     or shutil.which("claude")
     or str(Path.home() / ".local" / "bin" / "claude.exe")
 )
+# Outros servidores MCP que o Claude pode usar, além do evoapi: conectores da conta
+# claude.ai (prefixo claude_ai_<Nome>, ex: claude_ai_Trello) ou servidores locais
+# cadastrados com `claude mcp add`. Vazio = só o evoapi, com --strict-mcp-config,
+# que é a execução mais barata. Com algum nome, o strict cai e todos os servidores
+# configurados na máquina são carregados; só os listados aqui ficam liberados.
+EXTRA_MCP_SERVERS = [s.strip() for s in os.environ.get("EXTRA_MCP_SERVERS", "").split(",") if s.strip()]
+BASE_TOOLS = ["mcp__evoapi", "Skill", "Read", "WebSearch", "WebFetch"]
 
 
 def configurar_log() -> None:
@@ -192,13 +199,14 @@ def escrever_mcp_config() -> Path:
 def acordar_claude() -> dict:
     """Roda `claude -p` uma vez. Devolve o resumo do resultado."""
     prompt = (AQUI / "PROMPT.md").read_text(encoding="utf-8")
+    permitidas = BASE_TOOLS + [f"mcp__{nome}" for nome in EXTRA_MCP_SERVERS]
     cmd = [
         CLAUDE_BIN, "-p", prompt,
         "--model", CLAUDE_MODEL,
         "--mcp-config", str(escrever_mcp_config()),
-        "--strict-mcp-config",
+        *([] if EXTRA_MCP_SERVERS else ["--strict-mcp-config"]),
         "--permission-mode", "dontAsk",
-        "--allowedTools", "mcp__evoapi", "Skill", "Read", "WebSearch", "WebFetch",
+        "--allowedTools", *permitidas,
         "--output-format", "json",
     ]
     inicio = time.time()
@@ -235,7 +243,8 @@ def main() -> int:
     if trava is None:
         log.info("já existe um executor rodando; saindo")
         return 0
-    log.info("executor ativo: consulta a cada %ss, modelo %s, claude em %s", POLL_SECONDS, CLAUDE_MODEL, CLAUDE_BIN)
+    log.info("executor ativo: consulta a cada %ss, modelo %s, claude em %s, servidores extras: %s",
+             POLL_SECONDS, CLAUDE_MODEL, CLAUDE_BIN, ", ".join(EXTRA_MCP_SERVERS) or "nenhum")
 
     mcp = Mcp(MCP_URL, MCP_AUTH_TOKEN)
     travados_seguidos = 0
