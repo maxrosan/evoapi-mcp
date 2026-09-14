@@ -68,6 +68,11 @@ contexto de cada acionamento, cerca de um centavo por execução, então liste s
 o que o WhatsApp realmente precisa. Servidores locais cadastrados com
 `claude mcp add` entram pelo próprio nome.
 
+Para liberar só parte de um servidor, nomeie as ferramentas no formato
+`<servidor>__<ferramenta>`. É assim que o Gmail entra só de leitura: buscar,
+ler conversa, ler mensagem e listar marcadores. Enviar, responder, encaminhar
+e apagar ficam de fora, e o Claude sabe que ficam.
+
 ## Quando algo trava
 
 Se três acionamentos seguidos não tirarem nada da fila, o executor recua cinco
