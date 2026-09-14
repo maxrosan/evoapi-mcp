@@ -216,6 +216,9 @@ def summarize_event(payload: Any, owner_number: str | None = None,
         "from_me": minha,
         "chat": jid_to_number(jid) if jid else None,
         "chat_jid": jid,
+        # Endereço alternativo da conversa (o número quando o jid é @lid): o histórico
+        # usa para ligar a resposta, que sai pelo número, ao pedido, que chegou pelo @lid.
+        "chat_alt": key.get("remoteJidAlt"),
         "chat_type": ("grupo" if str(jid).endswith("@g.us") else "direto") if jid else None,
         "self_chat": True if propria else None,
         "type": tipo,
@@ -242,8 +245,18 @@ class EventLog:
         self.store = store if store is not None else build_store()
         self.owner_number = owner_number if owner_number is not None else os.environ.get("EVOLUTION_OWNER_NUMBER", "")
         self.wake_word = (os.environ.get("EVOLUTION_WAKE_WORD", "") or WAKE_WORD).strip().casefold()
+        # Histórico de pedidos e respostas (history.ConversationLog), ligado na subida.
+        self.history = None
         self.total = 0
         self.started = datetime.now()
+
+    def _abrir_historico(self, evento: dict[str, Any]) -> None:
+        if self.history is None:
+            return
+        try:
+            self.history.open(evento)
+        except Exception as e:  # o histórico nunca pode atrapalhar o acionamento
+            _log(f"histórico: falha ao registrar {evento.get('message_id')}: {e}")
 
     def resolve_voice(self, message_id: str, text: str | None) -> dict[str, Any] | None:
         """Decide se um áudio do dono, já transcrito, é instrução.
@@ -269,6 +282,7 @@ class EventLog:
             alvo["instruction"] = instrucao
             alvo["trigger"] = True
             alvo["voice"] = True
+            self._abrir_historico(alvo)
             _log(f"comando de voz em {alvo.get('chat')}: {instrucao[:PREVIEW_CHARS]!r} <<< ACIONAMENTO")
         else:
             _log(f"áudio do dono em {alvo.get('chat')} sem a palavra de ativação; ignorado")
@@ -343,12 +357,19 @@ class EventLog:
             e = detalhes.get(mid, {})
             if self.store.mark(mid, chat or e.get("chat"), instruction or e.get("preview")):
                 novos += 1
+            if self.history is not None:
+                try:
+                    self.history.close(mid)
+                except Exception as erro:
+                    _log(f"histórico: falha ao fechar {mid}: {erro}")
         return novos
 
     def add(self, payload: Any) -> dict[str, Any]:
         resumo = summarize_event(payload, owner_number=self.owner_number, replied_to_us=self.store.is_handled)
         self._eventos.append(resumo)
         self.total += 1
+        if resumo.get("trigger"):
+            self._abrir_historico(resumo)
         marca = " <<< ACIONAMENTO" if resumo.get("trigger") else ""
         if resumo.get("self_chat"):
             marca += " (conversa pessoal)"

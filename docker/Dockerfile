@@ -77,6 +77,8 @@ LABEL version="1.2.0"
 RUN apt-get update && apt-get install -y \
     curl \
     libcairo2 \
+    tesseract-ocr \
+    tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/*
 
 # Criar usuário não-root

@@ -131,6 +131,13 @@ def preload(model: str | None = None) -> None:
     """Baixa o modelo durante o build da imagem, para o primeiro uso não esperar."""
     Embedder(model or os.environ.get("EVOLUTION_MEMORY_MODEL")).embed(["aquecimento"])
     print("modelo de memória pronto", file=sys.stderr)
+    # Os modelos visuais do índice vão na mesma imagem, pela mesma linha do Dockerfile.
+    try:
+        from evoapi_mcp.visual import preload as preload_visual
+
+        preload_visual()
+    except Exception as e:
+        print(f"modelos visuais não pré-carregados: {e}", file=sys.stderr)
 
 
 class MemoryBank:

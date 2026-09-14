@@ -120,6 +120,30 @@ class EvolutionConfig(BaseSettings):
         default="",
         description="Modelo de vetores da memória (padrão: paraphrase-multilingual-MiniLM-L12-v2)"
     )
+    history_enabled: bool = Field(
+        default=True,
+        description="Grava pedidos de Max e respostas do assistente, com busca (search_history)"
+    )
+    index_enabled: bool = Field(
+        default=True,
+        description="Índice de documentos e imagens (index_media, search_documents)"
+    )
+    index_archived: bool = Field(
+        default=False,
+        description="archive_to_drive também indexa por padrão. Desligado: só indexa o que Max pedir"
+    )
+    index_drive_folder: str = Field(
+        default="INDEXADOS",
+        description="Pasta do Drive, relativa à base, onde vão as cópias do que é indexado"
+    )
+    ocr_lang: str = Field(
+        default="por+eng",
+        description="Idiomas do Tesseract para OCR"
+    )
+    visual_enabled: bool = Field(
+        default=True,
+        description="Vetores visuais (CLIP) para achar imagens pelo que mostram"
+    )
     tts_backend: str = Field(
         default="auto",
         description="Backend de texto para voz: auto, edge, api ou off"

@@ -274,7 +274,23 @@ class DriveClient:
             "folder": f"{self.root}/{folder}".strip("/") if folder else self.root or "root",
             "size": len(conteudo),
             "link": d.get("webViewLink"),
+            # Caminho local do que foi enviado: quem chamou pode indexar sem baixar de novo.
+            "path": str(path),
         }
+
+    def trash_file(self, file_id: str) -> bool:
+        """Manda para a lixeira do Drive um arquivo que o servidor criou."""
+        self._require()
+        r = requests.patch(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}",
+            headers=self._headers(),
+            params={"supportsAllDrives": "true"},
+            json={"trashed": True},
+            timeout=self.timeout,
+        )
+        self._check(r, f"Lixeira de {file_id}")
+        _log(f"na lixeira do Drive: {file_id}")
+        return True
 
     # -------------------------------------------------------------- download
 

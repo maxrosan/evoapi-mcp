@@ -21,6 +21,8 @@ from evoapi_mcp.client import EvolutionClient
 from evoapi_mcp.speech import SpeechError
 from evoapi_mcp.scheduler import ScheduleError
 from evoapi_mcp.memory import MemoriaError
+from evoapi_mcp.history import HistoryError
+from evoapi_mcp.indexer import IndexerError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.storage import sweep, usage
@@ -82,7 +84,7 @@ def _out(obj: Any) -> str:
     return dumps(obj)
 
 
-def _enviado(resultado: Any) -> dict:
+def _enviado(resultado: Any, texto: str | None = None) -> dict:
     """Compacta a resposta de um envio e registra a mensagem como já tratada.
 
     O registro importa por causa da conversa pessoal: lá toda mensagem do dono é
@@ -95,6 +97,22 @@ def _enviado(resultado: Any) -> dict:
             from evoapi_mcp.webhook import EVENTS
             EVENTS.store.mark(message_id, instruction="[enviada pelo assistente]")
     except Exception:  # nunca deixar o registro atrapalhar um envio bem-sucedido
+        pass
+    # Histórico: a resposta vai junto do pedido aberto na mesma conversa.
+    try:
+        from evoapi_mcp.webhook import EVENTS
+        historico = getattr(EVENTS, "history", None)
+        if historico is not None and isinstance(resultado, dict):
+            key = resultado.get("key") or {}
+            corpo = texto
+            if corpo is None:
+                from evoapi_mcp.formatters import compact_message
+                compacta = compact_message(resultado, max_text=None) if resultado.get("message") else {}
+                corpo = compacta.get("text") or (
+                    f"[{compacta.get('type') or 'arquivo'}] {compacta['file']}" if compacta.get("file") else None
+                )
+            historico.response(key.get("remoteJid"), key.get("remoteJidAlt"), corpo)
+    except Exception:
         pass
     return compact_send_result(resultado)
 
@@ -123,7 +141,7 @@ def send_text_message(number: str, text: str, link_preview: bool = True) -> str:
         link_preview: mostrar preview de links
     Returns: {ok, id, to, ts, status}
     """
-    return _out(_enviado(client.send_text(number=number, text=text, link_preview=link_preview)))
+    return _out(_enviado(client.send_text(number=number, text=text, link_preview=link_preview), texto=text))
 
 
 @mcp.tool()
@@ -212,10 +230,198 @@ def send_voice(number: str, text: str, voice: str | None = None) -> str:
         result = client.send_voice(number=number, text=text, voice=voice)
     except SpeechError as e:
         return _out({"error": str(e), "speech": client.speaker.describe()})
-    out = _enviado(result)
+    out = _enviado(result, texto=f"[áudio] {text}")
     if isinstance(result, dict) and result.get("_voice"):
         out["voice"] = result["_voice"]
     return _out(out)
+
+
+def _indice():
+    from evoapi_mcp.webhook import EVENTS
+    indice = getattr(EVENTS, "indexer", None)
+    if indice is None:
+        raise IndexerError("índice não está ativo neste servidor")
+    return indice
+
+
+@mcp.tool()
+def index_media(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    url: str | None = None,
+    note: str | None = None,
+    password: str | None = None,
+    copy_to_drive: bool = True,
+    wait_s: int = 30,
+) -> str:
+    """Indexa um PDF, imagem ou texto para ser achado depois. Só quando Max pedir.
+
+    Todo o trabalho é do servidor, sem ler o documento na conversa: extrai o texto,
+    faz OCR de imagem e PDF escaneado, gera vetores de texto e visuais, e guarda uma
+    cópia no Drive em INDEXADOS/AAAA/MM.AAAA. O mesmo arquivo nunca é indexado duas
+    vezes (hash). Do nome no padrão "DD.MM.AAAA - Emitente - R$ valor" saem data,
+    emitente e valor para filtros.
+
+    Args:
+        message_id: id da mensagem com o anexo (use `citada.id` ou um de `anexos_recentes`)
+        file_path: arquivo que já está no servidor
+        url: link público de um arquivo
+        note: o que é, em poucas palavras, para ajudar a achar ("comprovante do aluguel de set")
+        password: senha de PDF protegido
+        copy_to_drive: False não guarda cópia no Drive
+        wait_s: quantos segundos esperar o resultado (0 devolve na hora, com status "na fila")
+    Returns: {id, arquivo, tipo, status, data?, emitente?, valor?, link?, paginas?, ocr?, busca_visual?, aviso?, duplicado?}
+    """
+    try:
+        return _out(_indice().request(
+            message_id=message_id, file_path=file_path, url=url, note=note, password=password,
+            copy_to_drive=copy_to_drive, wait_s=max(0, min(int(wait_s), 120)),
+        ))
+    except IndexerError as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def search_documents(
+    query: str | None = None,
+    visual_query: str | None = None,
+    limit: int = 5,
+    emitente: str | None = None,
+    empresa: str | None = None,
+    categoria: str | None = None,
+    desde: str | None = None,
+    ate: str | None = None,
+    tipo: str | None = None,
+) -> str:
+    """Busca nos documentos e imagens indexados. Devolve trecho e link, não o arquivo.
+
+    Args:
+        query: o que procurar, em português ("nota da Econtec de março", "valor do aluguel")
+        visual_query: para achar imagem pelo que ela MOSTRA, em INGLÊS ("photo of a receipt",
+                      "screenshot of a spreadsheet"). Pode combinar com query
+        limit: máximo de resultados (padrão 5, máximo 20)
+        emitente: filtro por emitente ou nome do arquivo (parcial)
+        empresa: filtro pela pasta de primeiro nível (MR, FAS, Sol Prime...)
+        categoria: NOTA, BOLETO, COMPROVANTE, RECIBO ou RECEBIMENTO
+        desde / ate: datas AAAA-MM-DD, pela data do documento (ou da indexação)
+        tipo: "pdf", "image" ou "text"
+        Sem query nem visual_query, lista pelos filtros, do mais recente ao mais antigo.
+    Returns: {count, documentos: [{id, arquivo, tipo, data, emitente, valor, empresa, categoria, link, trecho, score, origem}]}
+    """
+    try:
+        itens = _indice().search(
+            query=query, visual_query=visual_query, limit=limit, emitente=emitente, empresa=empresa,
+            categoria=categoria, desde=desde, ate=ate, tipo=tipo,
+        )
+    except IndexerError as e:
+        return _out({"error": str(e)})
+    return _out({"count": len(itens), "documentos": itens})
+
+
+@mcp.tool()
+def read_document(id: int, max_chars: int = 4000) -> str:
+    """Texto completo de um documento indexado (o que foi extraído ou reconhecido por OCR).
+
+    Returns: {id, arquivo, status, link, texto, texto_cortado?}
+    """
+    try:
+        return _out(_indice().read(id, max_chars=max_chars))
+    except IndexerError as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def delete_document(id: int) -> str:
+    """Tira um documento do índice. Se a cópia no Drive foi criada pelo índice, vai para a lixeira.
+
+    Returns: {id, apagado, drive_lixeira?}
+    """
+    try:
+        return _out(_indice().delete(id))
+    except IndexerError as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def search_history(query: str, limit: int = 5, chat: str | None = None) -> str:
+    """Busca nas conversas passadas com o assistente: o que Max pediu e o que foi respondido.
+
+    O servidor grava cada pedido e cada resposta sozinho. Use para "o que eu pedi sobre
+    o NARA semana passada?", "o que você respondeu para a Keilla sobre o vídeo?".
+
+    Args:
+        query: assunto, em português
+        limit: máximo de conversas (padrão 5)
+        chat: filtra por conversa (parte do jid ou do número)
+    Returns: {count, conversas: [{id, quando, chat, pedido, resposta, score}]}
+    """
+    from evoapi_mcp.webhook import EVENTS
+    historico = getattr(EVENTS, "history", None)
+    if historico is None:
+        return _out({"error": "histórico não está ativo neste servidor"})
+    try:
+        itens = historico.search(query, limit=limit, chat=chat)
+    except HistoryError as e:
+        return _out({"error": str(e)})
+    return _out({"count": len(itens), "conversas": itens})
+
+
+def _encurta_campos(itens: Any, campos: tuple[str, ...], n: int) -> Any:
+    for item in itens or []:
+        for campo in campos:
+            valor = item.get(campo)
+            if isinstance(valor, str) and len(valor) > n:
+                item[campo] = valor[: n - 3] + "..."
+    return itens
+
+
+@mcp.tool()
+def executor_context(limit: int = 10, recent_messages: int = 6) -> str:
+    """Contexto pronto de todas as pendências numa chamada só. Uso do executor local.
+
+    Para cada pendência, além dos campos de pending_triggers: lembranças relevantes,
+    conversas passadas parecidas, documentos indexados relacionados e as últimas
+    mensagens do chat. O executor monta o prompt com isto antes de acordar o Claude,
+    que assim não gasta voltas buscando. Numa sessão normal não é preciso chamar.
+    """
+    import json as _json
+    from evoapi_mcp.webhook import EVENTS
+
+    dados = _json.loads(pending_triggers(limit))
+    memoria = getattr(EVENTS, "memory", None)
+    historico = getattr(EVENTS, "history", None)
+    indice = getattr(EVENTS, "indexer", None)
+    for pendencia in dados.get("pendentes", []):
+        consulta = " ".join(x for x in (
+            pendencia.get("instrucao"), (pendencia.get("citada") or {}).get("arquivo"),
+        ) if x)
+        contexto: dict[str, Any] = {}
+        if consulta.strip():
+            buscas = (
+                ("memoria", memoria and (lambda: _encurta_campos(memoria.recall(consulta, limit=4), ("texto",), 400))),
+                ("conversas_parecidas", historico and (
+                    lambda: historico.search(consulta, limit=3))),
+                ("documentos", indice and (lambda: indice.search(query=consulta, limit=3))),
+            )
+            for nome, buscar in buscas:
+                if not buscar:
+                    continue
+                try:
+                    achados = buscar()
+                except Exception:
+                    achados = None
+                if achados:
+                    contexto[nome] = achados
+        if recent_messages and pendencia.get("chat"):
+            try:
+                mensagens = _json.loads(get_chat_messages(number=pendencia["chat"], limit=int(recent_messages)))
+                lista = mensagens.get("messages") or []
+                contexto["mensagens_recentes"] = _encurta_campos(lista, ("text",), 300)
+            except Exception:
+                pass
+        if contexto:
+            pendencia["contexto"] = contexto
+    return _out(dados)
 
 
 def _memoria():
@@ -659,6 +865,7 @@ def archive_to_drive(
     folder: str = "",
     filename: str | None = None,
     password: str | None = None,
+    index: bool | None = None,
 ) -> str:
     """Arquiva um anexo do WhatsApp no Google Drive sem trazer o arquivo para a conversa.
 
@@ -673,18 +880,38 @@ def archive_to_drive(
                 (ex: "MR/2026/08.2026/BOLETO")
         filename: nome final do arquivo (padrão: o nome original)
         password: senha de um PDF protegido; a versão arquivada vai destravada
-    Returns: {id, name, folder, size, link, decrypted?}
+        index: True também indexa para busca futura (search_documents). Use quando Max
+               pedir para indexar. Padrão: EVOLUTION_INDEX_ARCHIVED (desligado)
+    Returns: {id, name, folder, size, link, decrypted?, indice?}
     """
     if bool(message_id) == bool(file_path):
         raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
     try:
         if message_id:
-            return _out(client.archive_media(
+            resultado = client.archive_media(
                 message_id=message_id, folder=folder, filename=filename, password=password
-            ))
-        return _out(client.archive_file(file_path=file_path, folder=folder, filename=filename))
+            )
+        else:
+            resultado = client.archive_file(file_path=file_path, folder=folder, filename=filename)
     except DriveError as e:
         return _out({"error": str(e), "drive": client.drive.describe()})
+    caminho = resultado.pop("path", None) if isinstance(resultado, dict) else None
+    indexar = config.index_archived if index is None else index
+    if indexar and caminho:
+        from evoapi_mcp.webhook import EVENTS
+        indice = getattr(EVENTS, "indexer", None)
+        if indice is None:
+            resultado["indice"] = "índice não está ativo"
+        else:
+            try:
+                r = indice.request(
+                    file_path=caminho, message_id=message_id, drive=resultado, folder=folder,
+                    filename=resultado.get("name"), wait_s=0,
+                )
+                resultado["indice"] = r.get("status")
+            except IndexerError as e:
+                resultado["indice"] = f"erro: {e}"
+    return _out(resultado)
 
 
 @mcp.tool()
@@ -854,6 +1081,10 @@ def get_instance_info(full: bool = False) -> str:
     info["agenda"] = agenda.describe() if agenda else {"ativa": False}
     memoria = getattr(EVENTS, "memory", None)
     info["memoria"] = memoria.describe() if memoria else {"ativa": False}
+    historico = getattr(EVENTS, "history", None)
+    info["historico"] = historico.describe() if historico else {"ativo": False}
+    indice = getattr(EVENTS, "indexer", None)
+    info["indice"] = indice.describe() if indice else {"ativo": False}
     return _out(info)
 
 

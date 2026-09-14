@@ -1084,7 +1084,7 @@ class EvolutionClient:
         )
         if isinstance(result, dict):
             result.setdefault("_voice", {
-                "path": str(path), "size": len(content), "chars": len(text or ""),
+                "path": str(path), "size": len(content), "chars": len(text or ""), "text": text,
                 "voice": (voice or "").strip() or self.speaker.voice, "backend": self.speaker.active_backend,
             })
         return result

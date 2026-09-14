@@ -143,6 +143,43 @@ def build_app(token: str):
     else:
         print("Memória desligada (EVOLUTION_MEMORY_ENABLED=false).", file=sys.stderr)
 
+    # Duas filas de trabalho em segundo plano: rápida (texto, histórico) e pesada
+    # (OCR, imagens). Histórico e índice usam o mesmo modelo de texto da memória.
+    from evoapi_mcp.jobs import JobQueues
+
+    filas = JobQueues()
+    eventos.queues = filas
+    eventos.indexer = None
+    if eventos.memory is not None and evolution_config.history_enabled:
+        from evoapi_mcp.history import ConversationLog
+
+        eventos.history = ConversationLog(
+            eventos.store, eventos.memory.embedder, filas,
+            owner_number=eventos.owner_number, tz=evolution_config.timezone,
+        )
+        print("Histórico de conversas ligado.", file=sys.stderr)
+    elif eventos.memory is None:
+        print("Histórico e índice desligados: exigem a memória (fastembed).", file=sys.stderr)
+    if eventos.memory is not None and evolution_config.index_enabled:
+        from evoapi_mcp import ocr as ocr_modulo
+        from evoapi_mcp.indexer import DocumentIndex
+        from evoapi_mcp.visual import VisualEmbedder
+
+        visual = VisualEmbedder() if evolution_config.visual_enabled else None
+        eventos.indexer = DocumentIndex(
+            eventos.store, evolution_client, eventos.memory.embedder,
+            visual if (visual is not None and visual.available) else None, filas,
+            tz=evolution_config.timezone, drive_folder=evolution_config.index_drive_folder,
+            ocr_lang=evolution_config.ocr_lang,
+        )
+        threading.Thread(target=eventos.indexer.warm, name="indice", daemon=True).start()
+        print(
+            f"Índice ligado: OCR {'sim' if ocr_modulo.available() else 'não (sem tesseract)'}, "
+            f"busca visual {'sim' if eventos.indexer.visual_ativo else 'não'}, "
+            f"arquivados indexam sozinhos: {'sim' if evolution_config.index_archived else 'não'}",
+            file=sys.stderr,
+        )
+
     def transcrever(message_id):
         try:
             resultado = evolution_client.transcribe_message(message_id, max_chars=0)

@@ -17,6 +17,8 @@ dependencies = [
     "edge-tts>=7.0.0",
     # Vetores da memória de longo prazo, com modelo local sem chave. Ver memory.py.
     "fastembed>=0.5.0",
+    # OCR do índice de documentos; exige o binário tesseract (apt) no servidor.
+    "pytesseract>=0.3.10",
 ]
 
 [project.optional-dependencies]

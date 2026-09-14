@@ -254,6 +254,34 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🗂️ Índice de documentos e imagens, histórico de conversas e contexto pronto
+
+- **Índice** (`indexer.py`): `index_media(message_id | file_path | url, note)` extrai o
+  texto do PDF, faz OCR de imagem e PDF escaneado (Tesseract, português), gera vetores
+  de texto e, para imagens, vetores visuais (CLIP ViT-B/32), tudo no servidor. Hash
+  SHA-256 impede indexar o mesmo arquivo duas vezes. Cópia no Drive em
+  `INDEXADOS/AAAA/MM.AAAA`, a não ser que o arquivo já tenha sido arquivado
+- Do nome no padrão "DD.MM.AAAA - Emitente - R$ valor" saem data, emitente e valor, e da
+  pasta saem empresa e categoria: `search_documents` filtra por eles sem ler documento.
+  `visual_query`, em inglês, acha imagem pelo que ela mostra. `read_document` devolve o
+  texto completo; `delete_document` tira do índice e manda a cópia para a lixeira
+- Só indexa o que Max pede. `archive_to_drive(index=True)` arquiva e indexa;
+  `EVOLUTION_INDEX_ARCHIVED=true` faz todo arquivamento indexar
+- **Duas filas** (`jobs.py`): rápida para texto e histórico, pesada para OCR e imagens,
+  cada uma com um trabalhador, para o OCR nunca atrasar o resto
+- **Histórico** (`history.py`): o servidor grava cada pedido de Max ao virar acionamento,
+  liga a ele as respostas enviadas pelas ferramentas na mesma conversa (inclusive quando
+  o pedido chega por @lid e a resposta sai pelo número) e, ao marcar como tratado, gera o
+  vetor da troca. `search_history` busca. Nenhum token do Claude
+- **Contexto pronto**: `executor_context` junta pendências, memória, conversas parecidas,
+  documentos e últimas mensagens numa chamada; o executor local põe isso no prompt antes
+  de acordar o Claude, que para de gastar voltas buscando. O Claude deixa de gravar
+  episódios na memória, porque o histórico já faz isso
+- Novas tabelas `indexed_files`, `indexed_chunks` e `conversations`; `get_instance_info`
+  expõe `historico` e `indice`, com as filas. Dockerfile ganha `tesseract-ocr` e
+  `tesseract-ocr-por`; `pytesseract` entra nas dependências. O pré-carregamento da
+  memória também baixa os modelos visuais
+
 ### 🧠 Memória de longo prazo (RAG)
 
 - Novas tools `remember(text, kind, source, chat)`, `recall(query, limit, kind)` e
