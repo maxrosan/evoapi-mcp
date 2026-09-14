@@ -153,9 +153,12 @@ def test_eventlog_abre_e_fecha_o_historico(historico):
 
     log = EventLog(store=historico.store, owner_number=DONO)
     log.history = historico
+    log.hook_min_age_s = 0
     e = evento("IA: coloque o bug no Trello", jid=KEILLA)
     e["data"]["key"]["id"] = "T1"
     log.add(e)
+    assert historico.store.get_conversation_by_trigger("T1") is None   # abre quando vira pendência vista
+    log.pending()
     assert historico.store.get_conversation_by_trigger("T1")["request"] == "coloque o bug no Trello"
     historico.response(KEILLA, None, "card criado")
     log.mark_handled(["T1"])
@@ -174,7 +177,9 @@ def test_falha_no_historico_nao_derruba_o_acionamento():
 
     log = EventLog(owner_number=DONO)
     log.history = Quebrado()
+    log.hook_min_age_s = 0
     e = evento("IA: faça X", jid=KEILLA)
     e["data"]["key"]["id"] = "T1"
     assert log.add(e)["trigger"] is True
+    assert [p["message_id"] for p in log.pending()] == ["T1"]
     assert log.mark_handled(["T1"]) == 1

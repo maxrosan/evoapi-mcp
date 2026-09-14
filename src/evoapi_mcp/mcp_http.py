@@ -122,9 +122,28 @@ def build_app(token: str):
         send_voice=(lambda chat, texto: evolution_client.send_voice(number=chat, text=texto))
         if evolution_client.speaker.available else None,
         tz=evolution_config.timezone,
+        on_sent=eventos.note_sent,
     )
     agenda.start()
     eventos.scheduler = agenda
+
+    # Arquivo mandado sozinho na conversa pessoal: o servidor pergunta o que fazer.
+    eventos.attachments = None
+    if dono and evolution_config.ask_on_attachment:
+        from evoapi_mcp.attachments import AttachmentAsker
+
+        perguntador = AttachmentAsker(
+            eventos,
+            send=lambda numero, texto: evolution_client.send_text(number=numero, text=texto, link_preview=False),
+            owner_number=dono,
+            delay_s=evolution_config.attachment_ask_delay_s,
+            question_ttl_s=evolution_config.attachment_question_ttl_min * 60,
+        )
+        perguntador.start()
+        eventos.attachments = perguntador
+        print(f"Pergunta sobre anexos ligada: espera {evolution_config.attachment_ask_delay_s} s.", file=sys.stderr)
+    else:
+        print("Pergunta sobre anexos desligada.", file=sys.stderr)
 
     # Memória de longo prazo: lembranças no mesmo banco, vetores de um modelo local.
     # O modelo carrega em segundo plano para a subida não esperar por ele.

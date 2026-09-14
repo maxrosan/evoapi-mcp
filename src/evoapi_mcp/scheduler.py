@@ -87,7 +87,9 @@ class Scheduler:
         send_voice: Callable[[str, str], Any] | None = None,
         tz: str = "America/Fortaleza",
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        on_sent: Callable[[str], None] | None = None,
     ):
+        self.on_sent = on_sent
         self.store = store
         self.send_text = send_text
         self.send_voice = send_voice
@@ -144,6 +146,8 @@ class Scheduler:
                 if message_id:
                     # Na conversa pessoal isto voltaria como instrução do dono.
                     self.store.mark(message_id, chat=item["chat"], instruction=f"{MARCADOR} #{sid}")
+                    if self.on_sent is not None:
+                        self.on_sent(message_id)
                 self.sent += 1
                 _log(f"#{sid} enviada para {item['chat']}")
                 processadas.append({"id": sid, "status": "sent"})

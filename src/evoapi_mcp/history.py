@@ -91,7 +91,7 @@ class ConversationLog:
             if tid in self._abertas:
                 return self._abertas[tid]["id"]
         citada = event.get("reply_to") or {}
-        citacao = citada.get("text") or citada.get("file")
+        citacao = citada.get("text") or citada.get("file") or (event.get("question") or {}).get("text")
         chat = event.get("chat_jid") or event.get("chat")
         cid = self.store.add_conversation(tid, chat, pedido[:MAX_TEXT], bool(event.get("voice")), citacao)
         if cid is None:

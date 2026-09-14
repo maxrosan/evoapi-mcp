@@ -108,6 +108,8 @@ class Watchdog:
             enviado_id = ((resultado or {}).get("key") or {}).get("id")
             if enviado_id:
                 self.events.store.mark(enviado_id, chat=self.owner_number, instruction=f"{MARCADOR} aviso")
+                if hasattr(self.events, "note_sent"):
+                    self.events.note_sent(enviado_id)
         except Exception as e:
             _log(f"não consegui marcar o próprio aviso: {e}", "WARNING")
 

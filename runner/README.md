@@ -69,8 +69,9 @@ o que o WhatsApp realmente precisa. Servidores locais cadastrados com
 `claude mcp add` entram pelo próprio nome.
 
 Para liberar só parte de um servidor, nomeie as ferramentas no formato
-`<servidor>__<ferramenta>`. É assim que o Gmail entra só de leitura: buscar,
-ler conversa, ler mensagem e listar marcadores. Enviar, responder, encaminhar
+`<servidor>__<ferramenta>`. É assim que o Gmail e o Google Drive entram só de
+leitura: no Gmail, buscar, ler conversa, ler mensagem e listar marcadores; no Drive,
+buscar, ler conteúdo, ver metadados e listar recentes. Enviar, responder, encaminhar
 e apagar ficam de fora, e o Claude sabe que ficam.
 
 ## Quando algo trava

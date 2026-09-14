@@ -144,6 +144,22 @@ class EvolutionConfig(BaseSettings):
         default=True,
         description="Vetores visuais (CLIP) para achar imagens pelo que mostram"
     )
+    ask_on_attachment: bool = Field(
+        default=True,
+        description="Pergunta o que fazer com arquivo mandado sem instrução na conversa pessoal"
+    )
+    attachment_ask_delay_s: int = Field(
+        default=60,
+        description="Segundos de espera por uma instrução antes de perguntar sobre o arquivo",
+        ge=10,
+        le=3600
+    )
+    attachment_question_ttl_min: int = Field(
+        default=30,
+        description="Minutos em que a próxima mensagem de Max é tomada como resposta à pergunta",
+        ge=1,
+        le=1440
+    )
     tts_backend: str = Field(
         default="auto",
         description="Backend de texto para voz: auto, edge, api ou off"

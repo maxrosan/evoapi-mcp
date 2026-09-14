@@ -96,6 +96,7 @@ def _enviado(resultado: Any, texto: str | None = None) -> dict:
         if message_id:
             from evoapi_mcp.webhook import EVENTS
             EVENTS.store.mark(message_id, instruction="[enviada pelo assistente]")
+            EVENTS.note_sent(message_id)
     except Exception:  # nunca deixar o registro atrapalhar um envio bem-sucedido
         pass
     # Histórico: a resposta vai junto do pedido aberto na mesma conversa.
@@ -394,6 +395,7 @@ def executor_context(limit: int = 10, recent_messages: int = 6) -> str:
     for pendencia in dados.get("pendentes", []):
         consulta = " ".join(x for x in (
             pendencia.get("instrucao"), (pendencia.get("citada") or {}).get("arquivo"),
+            *[a.get("arquivo") for a in pendencia.get("arquivos_em_questao") or []],
         ) if x)
         contexto: dict[str, Any] = {}
         if consulta.strip():
@@ -1085,6 +1087,8 @@ def get_instance_info(full: bool = False) -> str:
     info["historico"] = historico.describe() if historico else {"ativo": False}
     indice = getattr(EVENTS, "indexer", None)
     info["indice"] = indice.describe() if indice else {"ativo": False}
+    perguntador = getattr(EVENTS, "attachments", None)
+    info["perguntas_sobre_anexos"] = perguntador.describe() if perguntador else {"ativo": False}
     return _out(info)
 
 
@@ -1105,6 +1109,8 @@ def pending_triggers(limit: int = 10) -> str:
     Áudio do dono que começa com "Computador, ..." entra já transcrito, com `voz: true`.
     Se a instrução citou uma mensagem, `citada` traz o id dela e, sendo anexo, tipo,
     nome e mime: "IA: arquive isso em X" citando um PDF aponta para esse PDF.
+    `arquivos_em_questao` aparece quando Max responde à pergunta que o servidor fez sobre
+    arquivos que ele mandou sem instrução; `respondendo_a` traz a pergunta.
     `anexos_recentes` lista os anexos que Max mandou na mesma conversa até 10 min antes
     (ou 90 s depois) da instrução, sem citar: a foto seguida de "coloque no Trello".
 
@@ -1115,8 +1121,13 @@ def pending_triggers(limit: int = 10) -> str:
     """
     from evoapi_mcp.webhook import EVENTS
 
+    perguntador = getattr(EVENTS, "attachments", None)
     pendentes = []
     for e in EVENTS.pending(limit=limit):
+        anexos = EVENTS.context_media(e) or None
+        if anexos and perguntador is not None:
+            # Entregues ao executor como contexto: não há por que perguntar sobre eles.
+            perguntador.consume([a["id"] for a in anexos])
         pendentes.append(clean({
             "id": e.get("message_id"),
             "chat": e.get("chat_jid") or e.get("chat"),
@@ -1124,7 +1135,10 @@ def pending_triggers(limit: int = 10) -> str:
             "quando": e.get("at"),
             "instrucao": e.get("instruction"),
             # Quando Max respondeu citando uma mensagem do assistente: o que ele citou.
-            "respondendo_a": (e.get("reply_to") or {}).get("text"),
+            "respondendo_a": (e.get("reply_to") or {}).get("text") or (e.get("question") or {}).get("text"),
+            # Max mandou estes arquivos sem instrução, o servidor perguntou o que fazer, e
+            # esta pendência é a resposta: os ids são o message_id de cada arquivo.
+            "arquivos_em_questao": e.get("files_in_question") or None,
             # A mensagem citada, quando há: se for anexo, `citada.id` é o message_id
             # para download_media / archive_to_drive.
             "citada": clean({
@@ -1137,7 +1151,7 @@ def pending_triggers(limit: int = 10) -> str:
             "voz": True if e.get("voice") else None,
             # Fotos, vídeos e arquivos que Max mandou na mesma conversa logo antes (ou
             # logo depois) da instrução: é a isso que "isso", "esse ponto" se referem.
-            "anexos_recentes": EVENTS.context_media(e) or None,
+            "anexos_recentes": anexos,
         }))
     return _out({"count": len(pendentes), "pendentes": pendentes})
 

@@ -38,6 +38,10 @@ MEDIA_KINDS = ("image", "video", "document", "audio")
 # manda a foto e depois escreve) e um pouco depois (escreve e em seguida manda).
 CONTEXT_BEFORE_S = 600
 CONTEXT_AFTER_S = 90
+# Ganchos (histórico, pergunta sobre anexos) só rodam para acionamentos com pelo menos
+# esta idade: dá tempo de o envio do assistente registrar o id antes de o eco dele
+# chegar pelo webhook e ser confundido com uma mensagem de Max.
+HOOK_MIN_AGE_S = 3.0
 # Últimos dígitos comparados para reconhecer o próprio número. Oito porque o WhatsApp
 # escreve o mesmo telefone ora com o nono dígito, ora sem.
 TAIL_DIGITS = 8
@@ -247,8 +251,54 @@ class EventLog:
         self.wake_word = (os.environ.get("EVOLUTION_WAKE_WORD", "") or WAKE_WORD).strip().casefold()
         # Histórico de pedidos e respostas (history.ConversationLog), ligado na subida.
         self.history = None
+        # Pergunta sobre arquivos soltos na conversa pessoal (attachments.AttachmentAsker).
+        self.attachments = None
+        self.hook_min_age_s = HOOK_MIN_AGE_S
+        # Ids das mensagens que o próprio assistente mandou: o eco delas pelo webhook
+        # parece mensagem de Max na conversa pessoal.
+        self._enviadas: deque[str] = deque(maxlen=1000)
+        self._enviadas_set: set[str] = set()
         self.total = 0
         self.started = datetime.now()
+
+    def note_sent(self, message_id: str | None) -> None:
+        """Registra uma mensagem enviada pelo assistente (ferramentas, agenda, vigia)."""
+        if not message_id or message_id in self._enviadas_set:
+            return
+        if len(self._enviadas) == self._enviadas.maxlen:
+            self._enviadas_set.discard(self._enviadas[0])
+        self._enviadas.append(message_id)
+        self._enviadas_set.add(message_id)
+
+    def is_sent_by_assistant(self, message_id: str | None) -> bool:
+        return bool(message_id) and message_id in self._enviadas_set
+
+    def owner_instruction_since(self, since: float) -> bool:
+        """Max deu alguma instrução na conversa pessoal a partir deste instante?
+        Áudio ainda sendo transcrito conta: na conversa pessoal todo áudio dele é pedido."""
+        for e in self._eventos:
+            if not (e.get("from_me") and e.get("self_chat")):
+                continue
+            if not (e.get("trigger") or e.get("voice_pending") or e.get("voice")):
+                continue
+            if float(e.get("ts") or 0) < since or self.is_sent_by_assistant(e.get("message_id")):
+                continue
+            return True
+        return False
+
+    def _ganchos(self, evento: dict[str, Any]) -> None:
+        """Roda uma vez por acionamento, quando ele é visto como pendência."""
+        if evento.get("_ganchos") or self.is_sent_by_assistant(evento.get("message_id")):
+            return
+        if time.time() - float(evento.get("ts") or 0) < self.hook_min_age_s:
+            return
+        evento["_ganchos"] = True
+        if self.attachments is not None:
+            try:
+                self.attachments.on_trigger(evento)
+            except Exception as e:
+                _log(f"anexos: falha ao ligar resposta {evento.get('message_id')}: {e}")
+        self._abrir_historico(evento)
 
     def _abrir_historico(self, evento: dict[str, Any]) -> None:
         if self.history is None:
@@ -282,7 +332,6 @@ class EventLog:
             alvo["instruction"] = instrucao
             alvo["trigger"] = True
             alvo["voice"] = True
-            self._abrir_historico(alvo)
             _log(f"comando de voz em {alvo.get('chat')}: {instrucao[:PREVIEW_CHARS]!r} <<< ACIONAMENTO")
         else:
             _log(f"áudio do dono em {alvo.get('chat')} sem a palavra de ativação; ignorado")
@@ -327,7 +376,10 @@ class EventLog:
         if not acionamentos:
             return []
         tratados = self.store.handled_among(e["message_id"] for e in acionamentos)
-        return [e for e in acionamentos if e["message_id"] not in tratados][:limit]
+        saida = [e for e in acionamentos if e["message_id"] not in tratados][:limit]
+        for e in saida:
+            self._ganchos(e)
+        return saida
 
     def trigger(self, message_id: str | None) -> dict[str, Any] | None:
         """O resumo de um acionamento conhecido, ou None. Só acionamentos: uma
@@ -368,8 +420,11 @@ class EventLog:
         resumo = summarize_event(payload, owner_number=self.owner_number, replied_to_us=self.store.is_handled)
         self._eventos.append(resumo)
         self.total += 1
-        if resumo.get("trigger"):
-            self._abrir_historico(resumo)
+        if self.attachments is not None:
+            try:
+                self.attachments.observe(resumo)
+            except Exception as e:
+                _log(f"anexos: falha ao observar {resumo.get('message_id')}: {e}")
         marca = " <<< ACIONAMENTO" if resumo.get("trigger") else ""
         if resumo.get("self_chat"):
             marca += " (conversa pessoal)"

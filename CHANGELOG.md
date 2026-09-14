@@ -254,6 +254,24 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 📎 Pergunta sobre arquivo sem instrução, e busca no Google Drive
+
+- Arquivo mandado sozinho na conversa pessoal (PDF, imagem, vídeo, sem legenda) não
+  virava instrução e ficava esquecido. Agora o servidor espera
+  `EVOLUTION_ATTACHMENT_ASK_DELAY_S` (60 s) a partir do último arquivo do lote; se não
+  chegar texto ou áudio de Max depois do arquivo, e se o arquivo não tiver sido entregue
+  ao executor como anexo recente, o próprio servidor pergunta o que fazer, sem acordar o
+  Claude. Vários arquivos seguidos viram uma pergunta só (`attachments.py`)
+- A próxima instrução de Max na conversa pessoal, em até 30 min, ou citando a pergunta em
+  até 24 h, chega com `respondendo_a` (a pergunta) e `arquivos_em_questao` (os ids).
+  "Ignora" encerra
+- Correção: o eco das mensagens enviadas pelo próprio assistente chegava pelo webhook como
+  mensagem de Max na conversa pessoal e podia abrir um "pedido" no histórico. O servidor
+  agora registra os ids que envia (ferramentas, agenda, vigia, pergunta), e os ganchos do
+  histórico rodam quando o acionamento é visto como pendência, com pelo menos 3 s de idade
+- Executor: Google Drive só de leitura (`search_files`, `read_file_content`,
+  `get_file_metadata`, `list_recent_files`)
+
 ### 🗂️ Índice de documentos e imagens, histórico de conversas e contexto pronto
 
 - **Índice** (`indexer.py`): `index_media(message_id | file_path | url, note)` extrai o
