@@ -69,7 +69,8 @@ class FakeDrive:
         self.enviados = []
         self.lixeira = []
 
-    def upload_file(self, path, name=None, folder=None, mime=None):
+    def upload_file(self, path, name=None, folder=None, mime=None, base="financeiro"):
+        assert base == "arquivos"   # cópias do índice ficam fora da base financeira
         self.enviados.append({"path": str(path), "name": name, "folder": folder})
         n = len(self.enviados)
         return {"id": f"D{n}", "name": name, "folder": f"Claude/FINANCEIRO/{folder}",

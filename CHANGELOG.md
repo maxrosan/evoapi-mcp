@@ -254,6 +254,23 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🗃️ Arquivos da conversa, pasta de arquivos no Drive e hora local
+
+- "Pegue os dois últimos PDFs desta conversa e guarde no Trello da empresa X" funciona sem
+  citar ninguém. `executor_context` inclui `arquivos_da_conversa`: os últimos anexos
+  (imagem, vídeo, documento) da conversa, de qualquer remetente, com id, tipo, nome, quem
+  mandou e hora. Antes o contexto trazia só as 6 últimas mensagens, e os PDFs de um grupo
+  movimentado ficavam de fora
+- `get_chat_messages` e `find_messages` ganham `type`: "pdf", "document", "image",
+  "video", "audio", "text" ou "anexo", filtrado na varredura local
+- Nova tool `save_to_drive(message_ids, folder)`: guarda arquivos que não são financeiros
+  numa pasta de arquivos (`EVOLUTION_DRIVE_FILES_ROOT`, padrão ARQUIVOS), ao lado da base
+  financeira quando o app tem acesso à pasta-mãe e na raiz do Drive caso contrário, e
+  devolve um link por arquivo. O executor cria o card com um link por arquivo, sem abrir
+  nem resumir o documento. As cópias do índice também passam para essa pasta
+- Horas das mensagens no fuso de Max (`EVOLUTION_TIMEZONE`): o container roda em UTC, e
+  "14:07" no celular chegava como "17:07"
+
 ### 📎 Pergunta sobre arquivo sem instrução, e busca no Google Drive
 
 - Arquivo mandado sozinho na conversa pessoal (PDF, imagem, vídeo, sem legenda) não

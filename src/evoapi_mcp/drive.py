@@ -76,6 +76,11 @@ class DriveClient:
         self.refresh_token = (getattr(config, "drive_refresh_token", "") or "").strip()
         self.root = (getattr(config, "drive_root", "") or "").strip("/")
         self.root_id = (getattr(config, "drive_root_id", "") or "").strip()
+        # Pasta para o que não é financeiro (Trello, projetos, índice). Fica ao lado da base
+        # financeira quando dá; senão, na raiz do Meu Drive. Um id configurado vence.
+        self.files_root = (getattr(config, "drive_files_root", "") or "ARQUIVOS").strip("/") or "ARQUIVOS"
+        self.files_root_id = (getattr(config, "drive_files_root_id", "") or "").strip()
+        self._files_base: str | None = None
         self.timeout = int(getattr(config, "timeout", 30))
         self._token: str | None = None
         self._expires: datetime | None = None
@@ -93,6 +98,7 @@ class DriveClient:
             info["root"] = self.root
         if self.root_id:
             info["root_id"] = self.root_id
+        info["files_root"] = self.files_root
         if not self.available:
             info["hint"] = (
                 "Drive não configurado. Defina EVOLUTION_DRIVE_CLIENT_ID, "
@@ -193,14 +199,51 @@ class DriveClient:
         _log(f"pasta criada: {name}")
         return folder_id
 
-    def ensure_folder(self, path: str, create: bool = True) -> str:
+    def _parent_of(self, file_id: str) -> str | None:
+        r = requests.get(
+            f"{FILES_URL}/{file_id}",
+            headers=self._headers(),
+            params={"fields": "parents", "supportsAllDrives": "true"},
+            timeout=self.timeout,
+        )
+        pais = self._check(r, f"Pasta-mãe de {file_id}").get("parents") or []
+        return pais[0] if pais else None
+
+    def files_base_id(self) -> str:
+        """Id da pasta de arquivos. Tenta: id configurado; ao lado da base financeira; raiz."""
+        self._require()
+        if self._files_base:
+            return self._files_base
+        if self.files_root_id:
+            self._files_base = self.files_root_id
+            return self._files_base
+        base = None
+        if self.root_id:
+            try:
+                pai = self._parent_of(self.root_id)
+                if pai:
+                    base = self.find_child(self.files_root, pai, folder_only=True) or self.create_folder(self.files_root, pai)
+            except Exception as e:
+                _log(f"sem acesso à pasta ao lado da base financeira ({e}); usando a raiz do Drive", "WARNING")
+                base = None
+        if base is None:
+            base = self.ensure_folder(self.files_root, base_id="root")
+        self._files_base = base
+        _log(f"pasta de arquivos: {self.files_root} ({base})")
+        return base
+
+    def ensure_folder(self, path: str, create: bool = True, base_id: str | None = None) -> str:
         """Resolve (criando o que faltar) um caminho tipo 'MR/2026/08.2026/BOLETO'.
 
         O caminho é relativo a EVOLUTION_DRIVE_ROOT, quando definido.
         """
         self._require()
-        partes = [p for p in f"{self.root}/{path}".split("/") if p.strip()]
-        base = self.root_id or "root"
+        if base_id:
+            partes = [p for p in (path or "").split("/") if p.strip()]
+            base = base_id
+        else:
+            partes = [p for p in f"{self.root}/{path}".split("/") if p.strip()]
+            base = self.root_id or "root"
         chave = f"{base}:" + "/".join(partes)
         if chave in self._folder_cache:
             return self._folder_cache[chave]
@@ -232,8 +275,11 @@ class DriveClient:
         name: str | None = None,
         folder: str | None = None,
         mime: str | None = None,
+        base: str = "financeiro",
     ) -> dict[str, Any]:
         """Sobe um arquivo do disco do servidor para o Drive.
+
+        `base="arquivos"` usa a pasta de arquivos em vez da base financeira.
 
         Returns:
             dict: {id, name, folder, size, link}
@@ -252,7 +298,8 @@ class DriveClient:
 
         name = name or path.name
         mime = mime or mimetypes.guess_type(name)[0] or "application/octet-stream"
-        parent = self.ensure_folder(folder or "")
+        arquivos = base == "arquivos"
+        parent = self.ensure_folder(folder or "", base_id=self.files_base_id() if arquivos else None)
 
         meta = {"name": name, "parents": [parent]}
         r = requests.post(
@@ -271,7 +318,8 @@ class DriveClient:
         return {
             "id": d.get("id"),
             "name": d.get("name", name),
-            "folder": f"{self.root}/{folder}".strip("/") if folder else self.root or "root",
+            "folder": (f"{self.files_root}/{folder or ''}".strip("/") if arquivos
+                       else f"{self.root}/{folder}".strip("/") if folder else self.root or "root"),
             "size": len(conteudo),
             "link": d.get("webViewLink"),
             # Caminho local do que foi enviado: quem chamou pode indexar sem baixar de novo.

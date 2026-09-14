@@ -18,6 +18,7 @@ if str(src_dir) not in sys.path:
 
 from evoapi_mcp.config import EvolutionConfig
 from evoapi_mcp.formatters import (
+    message_kind_matches,
     compact_error,
     compact_message,
     extract_records,
@@ -451,8 +452,9 @@ class EvolutionClient:
         page: int = 1,
         max_text: int | None = 500,
         compact: bool = True,
+        kind: str | None = None,
     ) -> dict[str, Any]:
-        """Busca mensagens, opcionalmente filtrando por chat e por texto.
+        """Busca mensagens, opcionalmente filtrando por chat, por texto e por tipo.
 
         Endpoint: POST /chat/findMessages/{instanceId}
 
@@ -474,8 +476,8 @@ class EvolutionClient:
         """
         self._log(f"Buscando mensagens (limit={limit}, page={page}, query={'sim' if query else 'não'})")
 
-        if query:
-            return self._search_messages_locally(query, chat_id, limit, max_text, compact)
+        if query or kind:
+            return self._search_messages_locally(query, chat_id, limit, max_text, compact, kind=kind)
 
         raw = self._fetch_messages_page(chat_id, limit, page)
         records, meta = extract_records(raw)
@@ -497,11 +499,13 @@ class EvolutionClient:
         limit: int,
         max_text: int | None,
         compact: bool,
+        kind: str | None = None,
+        max_scan: int = MAX_SEARCH_SCAN,
     ) -> dict[str, Any]:
         matches: list[dict[str, Any]] = []
         scanned = 0
         page = 1
-        while scanned < MAX_SEARCH_SCAN and len(matches) < limit:
+        while scanned < max_scan and len(matches) < limit:
             raw = self._fetch_messages_page(chat_id, SEARCH_PAGE_SIZE, page)
             records, meta = extract_records(raw)
             if not records:
@@ -509,7 +513,7 @@ class EvolutionClient:
             for record in records:
                 scanned += 1
                 c = compact_message(record, None)
-                if message_matches(c, query):
+                if (not query or message_matches(c, query)) and message_kind_matches(c, kind):
                     matches.append(compact_message(record, max_text) if compact else record)
                     if len(matches) >= limit:
                         break
@@ -519,7 +523,76 @@ class EvolutionClient:
             if len(records) < SEARCH_PAGE_SIZE:
                 break
             page += 1
-        return {"query": query, "scanned": scanned, "count": len(matches), "messages": matches}
+        out: dict[str, Any] = {"query": query, "scanned": scanned, "count": len(matches), "messages": matches}
+        if kind:
+            out["type"] = kind
+        return out
+
+    def recent_attachments(self, chat: str, limit: int = 6, max_scan: int = 150) -> list[dict[str, Any]]:
+        """Últimos anexos da conversa (imagem, vídeo, documento), de qualquer remetente.
+
+        É o que permite "pegue os dois últimos PDFs desta conversa" sem citar ninguém.
+        Mais recente primeiro, com hora local e quem mandou.
+        """
+        chat_id = chat if "@" in (chat or "") else self.resolve_chat_jid(chat)[0]
+        achados = self._search_messages_locally(None, chat_id, limit, 120, True, kind="anexo", max_scan=max_scan)
+        saida = []
+        for m in achados.get("messages") or []:
+            texto = m.get("text")
+            item = {
+                "id": m.get("id"),
+                "tipo": m.get("type"),
+                "arquivo": m.get("file"),
+                "mime": m.get("mime"),
+                "legenda": texto if texto and texto != m.get("file") else None,
+                "de": "Max" if m.get("from") == "me" else (m.get("name") or m.get("from")),
+                "quando": m.get("ts"),
+            }
+            saida.append({k: v for k, v in item.items() if v is not None})
+        return saida
+
+    def save_to_drive(
+        self,
+        message_ids: list[str] | None = None,
+        file_path: str | None = None,
+        folder: str = "",
+        filename: str | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Guarda arquivos que não são financeiros na pasta de arquivos do Drive e devolve os links.
+
+        Um arquivo que falha não impede os outros: vai para `erros`.
+        """
+        if not self.drive.available:
+            raise DriveError("Drive não configurado")
+        ids = [m for m in (message_ids or []) if m]
+        if not ids and not file_path:
+            raise ValueError("Informe message_ids ou file_path")
+        salvos: list[dict[str, Any]] = []
+        erros: list[dict[str, Any]] = []
+        origens: list[tuple[str, str | None]] = [("message_id", m) for m in ids]
+        if file_path:
+            origens.append(("file_path", file_path))
+        for tipo_origem, valor in origens:
+            try:
+                if tipo_origem == "message_id":
+                    baixado = self.download_media(valor, password=password)
+                    caminho, nome = baixado["path"], baixado["file"]
+                else:
+                    caminho = str(Path(os.path.expandvars(valor)).expanduser())
+                    nome = Path(caminho).name
+                if filename and len(origens) == 1:
+                    nome = filename
+                enviado = self.drive.upload_file(caminho, name=nome, folder=folder, base="arquivos")
+                enviado.pop("path", None)
+                enviado[tipo_origem] = valor
+                salvos.append(enviado)
+            except Exception as e:
+                erros.append({tipo_origem: valor, "erro": str(e)})
+        out: dict[str, Any] = {"count": len(salvos), "arquivos": salvos}
+        if erros:
+            out["erros"] = erros
+        return out
 
     def get_messages_by_number(
         self,
@@ -529,6 +602,7 @@ class EvolutionClient:
         max_text: int | None = 500,
         compact: bool = True,
         query: str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Obtém mensagens de uma conversa por número.
 
@@ -549,7 +623,7 @@ class EvolutionClient:
         """
         chat_id, resolved = self.resolve_chat_jid(number)
         result = self.find_messages(
-            query=query, chat_id=chat_id, limit=limit, page=page, max_text=max_text, compact=compact
+            query=query, chat_id=chat_id, limit=limit, page=page, max_text=max_text, compact=compact, kind=kind
         )
         if isinstance(result, dict):
             result["chat"] = chat_id

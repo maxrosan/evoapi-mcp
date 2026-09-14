@@ -220,6 +220,11 @@ class EvolutionConfig(BaseSettings):
     drive_refresh_token: str = Field(default="", description="Refresh token OAuth do Google")
     drive_root: str = Field(default="", description="Pasta base no Drive, ex: FINANCEIRO")
     drive_root_id: str = Field(default="", description="Id da pasta base (criada pelo próprio app)")
+    drive_files_root: str = Field(
+        default="ARQUIVOS",
+        description="Pasta para arquivos que não são financeiros, ao lado da base financeira (ou na raiz)"
+    )
+    drive_files_root_id: str = Field(default="", description="Id da pasta de arquivos, se quiser fixar")
     base64_tools: bool = Field(
         default=False,
         description="Expõe as tools de base64 (send_*_base64, get_media_base64). Caras: use só por compatibilidade"

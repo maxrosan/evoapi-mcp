@@ -19,7 +19,7 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Callable
 
-from evoapi_mcp.formatters import _MEDIA_TYPES, clean, compact_message, jid_to_number
+from evoapi_mcp.formatters import _MEDIA_TYPES, clean, compact_message, display_timezone, jid_to_number
 from evoapi_mcp.store import build_store
 
 # Prefixo que, no futuro, aciona o bot. Aqui só é sinalizado.
@@ -160,7 +160,7 @@ def summarize_event(payload: Any, owner_number: str | None = None,
     resumo: dict[str, Any] = {
         "event": evento,
         "instance": payload.get("instance"),
-        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "at": datetime.now(display_timezone()).strftime("%Y-%m-%d %H:%M:%S"),
         # Carimbo numérico para medir idade sem parsear texto (o vigia usa isto).
         "ts": time.time(),
     }

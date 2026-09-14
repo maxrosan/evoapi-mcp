@@ -364,7 +364,7 @@ class DocumentIndex:
         quando = doc_date or datetime.now(ZoneInfo(self.tz)).date()
         pasta = f"{self.drive_folder}/{quando:%Y}/{quando:%m.%Y}"
         try:
-            enviado = cliente_drive.upload_file(caminho, name=nome, folder=pasta)
+            enviado = cliente_drive.upload_file(caminho, name=nome, folder=pasta, base="arquivos")
             self.store.update_indexed_file(
                 fid, drive_id=enviado.get("id"), drive_link=enviado.get("link"),
                 drive_folder=enviado.get("folder"), drive_owned=True,

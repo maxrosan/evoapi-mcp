@@ -28,6 +28,7 @@ from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.storage import sweep, usage
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
+from evoapi_mcp.formatters import set_display_timezone
 from evoapi_mcp.formatters import (
     clean,
     compact_chat,
@@ -74,6 +75,7 @@ mcp = FastMCP("Evolution API", instructions=INSTRUCTIONS)
 try:
     config = load_config()
     client = EvolutionClient(config)
+    set_display_timezone(config.timezone)
 except Exception as e:
     print(f"Falha ao inicializar o servidor: {e}", file=sys.stderr)
     sys.exit(1)
@@ -237,6 +239,37 @@ def send_voice(number: str, text: str, voice: str | None = None) -> str:
     return _out(out)
 
 
+@mcp.tool()
+def save_to_drive(
+    message_ids: list[str] | None = None,
+    file_path: str | None = None,
+    folder: str = "",
+    filename: str | None = None,
+    password: str | None = None,
+) -> str:
+    """Guarda arquivos que NÃO são financeiros no Drive e devolve um link por arquivo.
+
+    Use para "coloque esses PDFs no Trello da FAS" (guarde aqui e ponha os links no card)
+    ou "salva isso no Drive". Os arquivos vão para a pasta de arquivos, fora de FINANCEIRO,
+    direto do WhatsApp para o Drive, sem passar pela conversa. Documento financeiro
+    (boleto, nota, comprovante) continua com archive_to_drive e a skill de arquivamento.
+
+    Args:
+        message_ids: ids das mensagens com os arquivos (de `arquivos_da_conversa`, `citada`...)
+        file_path: um arquivo que já está no servidor
+        folder: subpasta, pela empresa ou projeto (ex: "FAS", "Inverto Currais Novos/Obra")
+        filename: nome final, só quando é um arquivo
+        password: senha de PDF protegido
+    Returns: {count, arquivos: [{id, name, folder, size, link, message_id}], erros?}
+    """
+    try:
+        return _out(client.save_to_drive(
+            message_ids=message_ids, file_path=file_path, folder=folder, filename=filename, password=password,
+        ))
+    except (DriveError, ValueError) as e:
+        return _out({"error": str(e), "drive": client.drive.describe()})
+
+
 def _indice():
     from evoapi_mcp.webhook import EVENTS
     indice = getattr(EVENTS, "indexer", None)
@@ -381,8 +414,8 @@ def executor_context(limit: int = 10, recent_messages: int = 6) -> str:
     """Contexto pronto de todas as pendências numa chamada só. Uso do executor local.
 
     Para cada pendência, além dos campos de pending_triggers: lembranças relevantes,
-    conversas passadas parecidas, documentos indexados relacionados e as últimas
-    mensagens do chat. O executor monta o prompt com isto antes de acordar o Claude,
+    conversas passadas parecidas, documentos indexados relacionados, as últimas
+    mensagens do chat e os últimos anexos da conversa, de qualquer remetente. O executor monta o prompt com isto antes de acordar o Claude,
     que assim não gasta voltas buscando. Numa sessão normal não é preciso chamar.
     """
     import json as _json
@@ -419,6 +452,13 @@ def executor_context(limit: int = 10, recent_messages: int = 6) -> str:
                 mensagens = _json.loads(get_chat_messages(number=pendencia["chat"], limit=int(recent_messages)))
                 lista = mensagens.get("messages") or []
                 contexto["mensagens_recentes"] = _encurta_campos(lista, ("text",), 300)
+            except Exception:
+                pass
+        if pendencia.get("chat"):
+            try:
+                arquivos = client.recent_attachments(pendencia["chat"], limit=6)
+                if arquivos:
+                    contexto["arquivos_da_conversa"] = arquivos
             except Exception:
                 pass
         if contexto:
@@ -697,6 +737,7 @@ def get_chat_messages(
     query: str | None = None,
     max_text: int | None = None,
     full: bool = False,
+    type: str | None = None,
 ) -> str:
     """Mensagens de uma conversa (mais recentes primeiro), em formato compacto.
 
@@ -708,12 +749,14 @@ def get_chat_messages(
         limit: quantidade (padrão: EVOLUTION_DEFAULT_LIMIT=20). Ajuste quando o usuário pedir N mensagens
         page: página, 1 = mais recentes
         query: filtra localmente por texto/legenda/nome de arquivo (case-insensitive)
+        type: só este tipo: "pdf", "document", "image", "video", "audio", "text", ou "anexo"
+              (imagem, vídeo ou documento). "Os dois últimos PDFs" é type="pdf", limit=2
         max_text: corte do texto por mensagem (0 = sem corte; padrão: 500)
         full: True devolve os registros brutos da API (muito mais tokens)
     """
     return _out(client.get_messages_by_number(
         number=number, limit=_limit(limit), page=page, query=query,
-        max_text=_max_text(max_text), compact=not full,
+        max_text=_max_text(max_text), compact=not full, kind=type,
     ))
 
 
@@ -725,12 +768,14 @@ def find_messages(
     page: int = 1,
     max_text: int | None = None,
     full: bool = False,
+    type: str | None = None,
 ) -> str:
     """Busca mensagens em todas as conversas (ou em chat_id), formato compacto.
 
     Args:
         query: termo buscado em texto/legenda/nome de arquivo; a varredura é local, até 500 mensagens
         chat_id: jid do chat (ex: 5511999999999@s.whatsapp.net ou grupo ...@g.us)
+        type: só este tipo: "pdf", "document", "image", "video", "audio", "text" ou "anexo"
         limit: máximo de resultados (padrão: 20)
         page: página quando não há query
         max_text: corte do texto por mensagem (0 = sem corte)
@@ -738,7 +783,7 @@ def find_messages(
     """
     return _out(client.find_messages(
         query=query, chat_id=chat_id, limit=_limit(limit), page=page,
-        max_text=_max_text(max_text), compact=not full,
+        max_text=_max_text(max_text), compact=not full, kind=type,
     ))
 
 

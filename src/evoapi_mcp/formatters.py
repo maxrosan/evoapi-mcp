@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 # Tipos de mensagem do WhatsApp -> tipo simplificado
@@ -72,6 +73,43 @@ def truncate(text: str | None, max_chars: int | None) -> tuple[str | None, bool]
     return text[: max_chars - 1].rstrip() + _ELLIPSIS, True
 
 
+# Fuso em que as horas são mostradas. None = hora local da máquina (comportamento antigo).
+# O servidor liga o fuso de Max na subida: o container roda em UTC, e "14:07" no
+# celular chegava como "17:07", confundindo pedidos como "os PDFs de hoje à tarde".
+_DISPLAY_TZ: ZoneInfo | None = None
+
+
+def set_display_timezone(tz: str | None) -> None:
+    global _DISPLAY_TZ
+    _DISPLAY_TZ = ZoneInfo(tz) if tz else None
+
+
+def display_timezone() -> ZoneInfo | None:
+    return _DISPLAY_TZ
+
+
+ATTACHMENT_KINDS = ("image", "video", "document")
+_KIND_ALIASES = {
+    "imagem": "image", "foto": "image", "fotos": "image", "documento": "document",
+    "áudio": "audio", "audio": "audio", "vídeo": "video", "video": "video", "texto": "text",
+}
+
+
+def message_kind_matches(compact: dict[str, Any], kind: str | None) -> bool:
+    """Filtro por tipo de mensagem: pdf, anexo (imagem, vídeo ou documento), ou um tipo exato."""
+    k = (kind or "").strip().lower()
+    if not k:
+        return True
+    tipo = compact.get("type")
+    if k == "pdf":
+        mime = (compact.get("mime") or "").lower()
+        nome = (compact.get("file") or "").lower()
+        return tipo == "document" and ("pdf" in mime or nome.endswith(".pdf"))
+    if k in ("anexo", "anexos", "arquivo", "arquivos", "attachment", "file", "media"):
+        return tipo in ATTACHMENT_KINDS
+    return tipo == _KIND_ALIASES.get(k, k)
+
+
 def fmt_ts(ts: Any) -> str | None:
     """Converte timestamp (segundos, ms, string ou ISO) para 'YYYY-MM-DD HH:MM'."""
     if ts is None or ts == "":
@@ -82,13 +120,13 @@ def fmt_ts(ts: Any) -> str | None:
                 ts = int(ts)
             else:
                 # ISO 8601 (ex: updatedAt dos chats)
-                return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
         if isinstance(ts, dict):  # protobuf Long {low, high}
             ts = int(ts.get("low", 0)) + (int(ts.get("high", 0)) << 32)
         ts = float(ts)
         if ts > 1e12:  # milissegundos
             ts /= 1000
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(ts, _DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError, OSError, OverflowError):
         return str(ts)
 
