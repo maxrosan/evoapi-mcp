@@ -75,6 +75,18 @@ class InvalidPhoneNumberError(EvolutionAPIError):
     pass
 
 
+def _record_ts(record: dict[str, Any]) -> float:
+    """Hora de um registro da Evolution em segundos, para juntar conversas de dois endereços."""
+    ts = record.get("messageTimestamp") if isinstance(record, dict) else None
+    if isinstance(ts, dict):
+        ts = int(ts.get("low", 0)) + (int(ts.get("high", 0)) << 32)
+    try:
+        valor = float(ts)
+    except (TypeError, ValueError):
+        return 0.0
+    return valor / 1000 if valor > 1e12 else valor
+
+
 class EvolutionClient:
     """Cliente HTTP direto para Evolution API.
 
@@ -97,6 +109,11 @@ class EvolutionClient:
         self.transcriber = Transcriber(config)
         self.speaker = Speaker(config)
         self.drive = DriveClient(config)
+        # Pares de endereço da mesma conversa 1:1: o WhatsApp guarda o que sai do celular
+        # sob <id>@lid e o que a API envia sob <número>@s.whatsapp.net. Ler só um deles
+        # mostra metade da conversa.
+        self._aliases: dict[str, set[str]] = {}
+        self._aliases_refreshed: datetime | None = None
 
         # Headers padrão para todas as requisições
         self.headers = {
@@ -250,6 +267,7 @@ class EvolutionClient:
         except EvolutionAPIError as e:
             self._log(f"Falha ao listar conversas para resolver {clean_number}: {e}", "WARNING")
             return fallback, False
+        self._learn_from_chats(chats)
 
         for chat in chats if isinstance(chats, list) else []:
             remote_jid = chat.get("remoteJid") or ""
@@ -260,6 +278,56 @@ class EvolutionClient:
                 return remote_jid, True
 
         return fallback, False
+
+    # ------------------------------------------------------------ endereços @lid
+
+    def learn_chat_alias(self, a: str | None, b: str | None) -> bool:
+        """Registra que dois endereços são a mesma conversa (um @lid e um número)."""
+        if not a or not b or a == b:
+            return False
+        if {a.rsplit("@", 1)[-1], b.rsplit("@", 1)[-1]} != {"lid", "s.whatsapp.net"}:
+            return False
+        novo = b not in self._aliases.get(a, set())
+        self._aliases.setdefault(a, set()).add(b)
+        self._aliases.setdefault(b, set()).add(a)
+        return novo
+
+    def _learn_from_chats(self, chats: Any) -> int:
+        novos = 0
+        for chat in chats if isinstance(chats, list) else []:
+            if not isinstance(chat, dict):
+                continue
+            ultima = chat.get("lastMessage")
+            chave = ultima.get("key") if isinstance(ultima, dict) else None
+            if isinstance(chave, dict):
+                novos += self.learn_chat_alias(chave.get("remoteJid"), chave.get("remoteJidAlt"))
+                novos += self.learn_chat_alias(chave.get("participant"), chave.get("participantAlt"))
+            remoto = chat.get("remoteJid") or ""
+            numero = self._chat_alt_number(chat) if remoto.endswith(LID_JID_SUFFIX) else None
+            if numero:
+                novos += self.learn_chat_alias(remoto, f"{numero}{PERSONAL_JID_SUFFIX}")
+        return novos
+
+    def refresh_chat_aliases(self, max_age_s: float = 300) -> int:
+        """Relê a lista de conversas para aprender pares novos, no máximo a cada `max_age_s`."""
+        agora = datetime.now()
+        if self._aliases_refreshed and (agora - self._aliases_refreshed).total_seconds() < max_age_s:
+            return 0
+        self._aliases_refreshed = agora
+        try:
+            novos = self._learn_from_chats(self.find_chats(enrich_with_names=False))
+        except Exception as e:
+            self._log(f"Falha ao atualizar endereços @lid: {e}", "WARNING")
+            return 0
+        if novos:
+            self._log(f"{novos} par(es) de endereço @lid aprendidos")
+        return novos
+
+    def chat_addresses(self, chat_id: str | None) -> list[str | None]:
+        """O endereço pedido primeiro, depois os outros endereços da mesma conversa."""
+        if not chat_id or chat_id.endswith("@g.us"):
+            return [chat_id]
+        return [chat_id] + sorted(self._aliases.get(chat_id, set()) - {chat_id})
 
     def _is_cache_expired(self) -> bool:
         """Verifica se o cache de contatos expirou.
@@ -479,8 +547,18 @@ class EvolutionClient:
         if query or kind:
             return self._search_messages_locally(query, chat_id, limit, max_text, compact, kind=kind)
 
-        raw = self._fetch_messages_page(chat_id, limit, page)
-        records, meta = extract_records(raw)
+        enderecos = self.chat_addresses(chat_id)
+        if len(enderecos) > 1:
+            records = []
+            for endereco in enderecos:
+                parte, _ = extract_records(self._fetch_messages_page(endereco, limit, page))
+                records.extend(parte)
+            records.sort(key=_record_ts, reverse=True)
+            records = records[:limit]
+            meta: dict[str, Any] = {"chats": enderecos}
+        else:
+            raw = self._fetch_messages_page(chat_id, limit, page)
+            records, meta = extract_records(raw)
         if not compact:
             return {**meta, "count": len(records), "messages": records}
         return {**meta, "count": len(records), "messages": [compact_message(r, max_text) for r in records]}
@@ -502,30 +580,42 @@ class EvolutionClient:
         kind: str | None = None,
         max_scan: int = MAX_SEARCH_SCAN,
     ) -> dict[str, Any]:
-        matches: list[dict[str, Any]] = []
+        enderecos = self.chat_addresses(chat_id)
+        achados: list[tuple[float, dict[str, Any]]] = []
         scanned = 0
-        page = 1
-        while scanned < max_scan and len(matches) < limit:
-            raw = self._fetch_messages_page(chat_id, SEARCH_PAGE_SIZE, page)
-            records, meta = extract_records(raw)
-            if not records:
-                break
-            for record in records:
-                scanned += 1
-                c = compact_message(record, None)
-                if (not query or message_matches(c, query)) and message_kind_matches(c, kind):
-                    matches.append(compact_message(record, max_text) if compact else record)
-                    if len(matches) >= limit:
-                        break
-            total_pages = meta.get("pages")
-            if total_pages is not None and page >= int(total_pages):
-                break
-            if len(records) < SEARCH_PAGE_SIZE:
-                break
-            page += 1
+        for endereco in enderecos:
+            deste = 0
+            page = 1
+            # Cada endereço é varrido até `max_scan` mensagens (o corte fica no fim da página).
+            while deste < limit:
+                raw = self._fetch_messages_page(endereco, SEARCH_PAGE_SIZE, page)
+                records, meta = extract_records(raw)
+                if not records:
+                    break
+                for record in records:
+                    scanned += 1
+                    c = compact_message(record, None)
+                    if (not query or message_matches(c, query)) and message_kind_matches(c, kind):
+                        achados.append((_record_ts(record), compact_message(record, max_text) if compact else record))
+                        deste += 1
+                        if deste >= limit:
+                            break
+                total_pages = meta.get("pages")
+                if total_pages is not None and page >= int(total_pages):
+                    break
+                if len(records) < SEARCH_PAGE_SIZE:
+                    break
+                if page * SEARCH_PAGE_SIZE >= max_scan:
+                    break
+                page += 1
+        if len(enderecos) > 1:
+            achados.sort(key=lambda par: par[0], reverse=True)
+        matches = [m for _, m in achados[:limit]]
         out: dict[str, Any] = {"query": query, "scanned": scanned, "count": len(matches), "messages": matches}
         if kind:
             out["type"] = kind
+        if len(enderecos) > 1:
+            out["chats"] = enderecos
         return out
 
     def recent_attachments(self, chat: str, limit: int = 6, max_scan: int = 150) -> list[dict[str, Any]]:

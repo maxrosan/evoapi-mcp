@@ -127,6 +127,9 @@ def build_app(token: str):
     agenda.start()
     eventos.scheduler = agenda
 
+    # Cada evento ensina ao cliente os dois endereços de uma conversa (@lid e número).
+    eventos.on_alias = evolution_client.learn_chat_alias
+
     # Arquivo mandado sozinho na conversa pessoal: o servidor pergunta o que fazer.
     eventos.attachments = None
     if dono and evolution_config.ask_on_attachment:

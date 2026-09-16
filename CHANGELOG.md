@@ -254,6 +254,21 @@ Esta release reduz drasticamente o volume de texto que cada tool devolve ao LLM 
 - Corrigido: a detecção de conversa pessoal no bot usava `instance_name`, que é um
   apelido ("Max 1") e não um telefone. Nunca tinha reconhecido nada
 
+### 🔀 Conversa lida pelos dois endereços (@lid e número)
+
+- Com a migração do WhatsApp para LID, uma conversa 1:1 fica dividida: o que sai do
+  celular ou do WhatsApp Web é guardado sob `<id>@lid`, e o que a API envia, sob
+  `<número>@s.whatsapp.net`. Lendo só o número, o executor via apenas as próprias
+  respostas antigas: pediram um áudio explicando "a situação da Silvana" logo abaixo da
+  explicação, e ele respondeu que não havia nada sobre isso na conversa
+- O cliente aprende os pares pela lista de conversas (última mensagem com `remoteJidAlt`,
+  participantes de grupo com `participantAlt`) e pelos eventos do webhook, e passa a ler e
+  buscar nos dois endereços, juntando pela hora. Vale para `get_chat_messages`,
+  `find_messages`, as buscas por tipo, os anexos recentes e as mensagens do contexto
+  pronto. A lista de conversas é relida no máximo a cada 5 minutos
+- Executor: não afirma que algo não está na conversa quando a leitura só trouxe respostas
+  do próprio assistente; pede para Max citar
+
 ### 🗃️ Arquivos da conversa, pasta de arquivos no Drive e hora local
 
 - "Pegue os dois últimos PDFs desta conversa e guarde no Trello da empresa X" funciona sem

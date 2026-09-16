@@ -17,6 +17,10 @@ nada para obter o que já está escrito neste prompt.
      contexto. Destaques feitos à mão (círculo, seta) apontam o assunto.
    - Use a memória, as conversas passadas e os documentos do contexto sem perguntar
      de novo. Só pergunte se ainda não der para saber, e diga o que você viu.
+   - Antes de afirmar que algo não está "nesta conversa", confira se as mensagens lidas
+     incluem mensagens de Max e do contato, e não só respostas antigas do assistente.
+     Se só houver respostas do assistente, a leitura veio incompleta: diga isso e peça
+     para Max citar a mensagem, em vez de dizer que não existe.
    - `voz: true`: a instrução é a transcrição de um áudio e erra nomes próprios;
      desfaça pelo chat e pelo contexto.
    - Resposta **em áudio** pedida: `send_voice(number, text)`, texto curto e falado.

@@ -258,6 +258,9 @@ class EventLog:
         # parece mensagem de Max na conversa pessoal.
         self._enviadas: deque[str] = deque(maxlen=1000)
         self._enviadas_set: set[str] = set()
+        # Chamado com (endereço, endereço alternativo) de cada evento: o cliente aprende que
+        # <id>@lid e <número>@s.whatsapp.net são a mesma conversa.
+        self.on_alias = None
         self.total = 0
         self.started = datetime.now()
 
@@ -420,6 +423,11 @@ class EventLog:
         resumo = summarize_event(payload, owner_number=self.owner_number, replied_to_us=self.store.is_handled)
         self._eventos.append(resumo)
         self.total += 1
+        if self.on_alias is not None and resumo.get("chat_jid") and resumo.get("chat_alt"):
+            try:
+                self.on_alias(resumo["chat_jid"], resumo["chat_alt"])
+            except Exception as e:
+                _log(f"endereços: falha ao aprender par de {resumo.get('chat_jid')}: {e}")
         if self.attachments is not None:
             try:
                 self.attachments.observe(resumo)

@@ -422,6 +422,8 @@ def executor_context(limit: int = 10, recent_messages: int = 6) -> str:
     from evoapi_mcp.webhook import EVENTS
 
     dados = _json.loads(pending_triggers(limit))
+    if dados.get("pendentes"):
+        client.refresh_chat_aliases()
     memoria = getattr(EVENTS, "memory", None)
     historico = getattr(EVENTS, "history", None)
     indice = getattr(EVENTS, "indexer", None)
@@ -754,6 +756,10 @@ def get_chat_messages(
         max_text: corte do texto por mensagem (0 = sem corte; padrão: 500)
         full: True devolve os registros brutos da API (muito mais tokens)
     """
+    if "@" in (number or "") and not number.endswith("@g.us"):
+        # Endereço completo: sem isto a leitura ficaria só com este, e a conversa pode
+        # estar dividida entre @lid (celular) e número (API).
+        client.refresh_chat_aliases()
     return _out(client.get_messages_by_number(
         number=number, limit=_limit(limit), page=page, query=query,
         max_text=_max_text(max_text), compact=not full, kind=type,
@@ -781,6 +787,8 @@ def find_messages(
         max_text: corte do texto por mensagem (0 = sem corte)
         full: True devolve registros brutos (muito mais tokens)
     """
+    if chat_id and not chat_id.endswith("@g.us"):
+        client.refresh_chat_aliases()
     return _out(client.find_messages(
         query=query, chat_id=chat_id, limit=_limit(limit), page=page,
         max_text=_max_text(max_text), compact=not full, kind=type,
