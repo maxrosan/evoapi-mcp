@@ -91,7 +91,7 @@ def escolher_modelo(pendentes: list[dict]) -> tuple[str, float, str | None]:
     for pendencia in pendentes or []:
         texto = _sem_acento(" ".join(str(pendencia.get(c) or "") for c in ("instrucao", "respondendo_a")))
         for padrao in INVESTIGATION_PATTERNS:
-            achado = re.search(padrao, texto)
+            achado = re.search(_sem_acento(padrao), texto)  # a lista do .env pode ter acento
             if achado:
                 return INVESTIGATION_MODEL, max(CLAUDE_TIMEOUT_S, INVESTIGATION_TIMEOUT_S), achado.group(0)
     return CLAUDE_MODEL, CLAUDE_TIMEOUT_S, None

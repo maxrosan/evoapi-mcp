@@ -9,6 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "runner"))
 watch = pytest.importorskip("watch")
 
 
+@pytest.fixture(autouse=True)
+def lista_padrao(monkeypatch):
+    """Os testes usam a lista padrão, não a do runner/.env desta máquina."""
+    padrao = [p.strip() for p in watch._PADRAO_INVESTIGACAO.split(",") if p.strip()]
+    monkeypatch.setattr(watch, "INVESTIGATION_PATTERNS", padrao)
+
+
 def _p(instrucao, respondendo_a=None):
     return {"id": "X", "chat": "c", "instrucao": instrucao, "respondendo_a": respondendo_a}
 
@@ -52,3 +59,11 @@ def test_uma_investigacao_no_lote_basta_e_resposta_citada_conta():
     modelo, _, motivo = watch.escolher_modelo([_p("sim", respondendo_a="Quer que eu investigue o bug?")])
     assert modelo == watch.INVESTIGATION_MODEL
     assert watch.escolher_modelo([]) == (watch.CLAUDE_MODEL, watch.CLAUDE_TIMEOUT_S, None)
+
+
+def test_lista_do_env_com_acento(monkeypatch):
+    monkeypatch.setattr(watch, "INVESTIGATION_PATTERNS", ["análise", "verifi"])
+    assert watch.escolher_modelo([_p("faça uma análise desse PDF")])[0] == watch.INVESTIGATION_MODEL
+    assert watch.escolher_modelo([_p("Faca uma ANALISE disso")])[0] == watch.INVESTIGATION_MODEL
+    assert watch.escolher_modelo([_p("verifique esse bug")])[0] == watch.INVESTIGATION_MODEL
+    assert watch.escolher_modelo([_p("arquiva o boleto")])[0] == watch.CLAUDE_MODEL
