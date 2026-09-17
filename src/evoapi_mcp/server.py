@@ -26,6 +26,7 @@ from evoapi_mcp.indexer import IndexerError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.pdfdoc import PdfDocError, extract_pdf, build_pdf as pdfdoc_build
+from evoapi_mcp.video import VideoError, extract_frames, is_video
 from evoapi_mcp.storage import sweep, usage
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
@@ -64,7 +65,9 @@ você. Escolha o caminho pela origem do arquivo:
 
 Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
 documento tem camada de texto, view_media quando não tem (comprovante fotografado,
-PDF escaneado) e transcribe_audio para áudio. get_media_base64 e as tools de base64
+PDF escaneado) e transcribe_audio para áudio — inclusive para o que é falado num
+vídeo. A IMAGEM do vídeo vem por view_video (quadros escolhidos pelo servidor) ou
+video_frames (mesmos quadros gravados no disco, para reusar). get_media_base64 e as tools de base64
 estão desligadas por padrão justamente por serem o caminho caro; ligue-as em
 EVOLUTION_BASE64_TOOLS só se nada mais servir.
 
@@ -291,10 +294,11 @@ def index_media(
     copy_to_drive: bool = True,
     wait_s: int = 30,
 ) -> str:
-    """Indexa um PDF, imagem ou texto para ser achado depois. Só quando Max pedir.
+    """Indexa um PDF, imagem, vídeo ou texto para ser achado depois. Só quando Max pedir.
 
     Todo o trabalho é do servidor, sem ler o documento na conversa: extrai o texto,
-    faz OCR de imagem e PDF escaneado, gera vetores de texto e visuais, e guarda uma
+    faz OCR de imagem e PDF escaneado, transcreve a fala do vídeo e guarda alguns
+    quadros dele, gera vetores de texto e visuais, e guarda uma
     cópia no Drive em INDEXADOS/AAAA/MM.AAAA. O mesmo arquivo nunca é indexado duas
     vezes (hash). Do nome no padrão "DD.MM.AAAA - Emitente - R$ valor" saem data,
     emitente e valor para filtros.
@@ -333,15 +337,16 @@ def search_documents(
     """Busca nos documentos e imagens indexados. Devolve trecho e link, não o arquivo.
 
     Args:
-        query: o que procurar, em português ("nota da Econtec de março", "valor do aluguel")
-        visual_query: para achar imagem pelo que ela MOSTRA, em INGLÊS ("photo of a receipt",
-                      "screenshot of a spreadsheet"). Pode combinar com query
+        query: o que procurar, em português ("nota da Econtec de março", "valor do aluguel",
+               ou o que foi dito num vídeo indexado)
+        visual_query: para achar imagem ou vídeo pelo que MOSTRA, em INGLÊS ("photo of a
+                      receipt", "screenshot of a spreadsheet"). Pode combinar com query
         limit: máximo de resultados (padrão 5, máximo 20)
         emitente: filtro por emitente ou nome do arquivo (parcial)
         empresa: filtro pela pasta de primeiro nível (MR, FAS, Sol Prime...)
         categoria: NOTA, BOLETO, COMPROVANTE, RECIBO ou RECEBIMENTO
         desde / ate: datas AAAA-MM-DD, pela data do documento (ou da indexação)
-        tipo: "pdf", "image" ou "text"
+        tipo: "pdf", "image", "video" ou "text"
         Sem query nem visual_query, lista pelos filtros, do mais recente ao mais antigo.
     Returns: {count, documentos: [{id, arquivo, tipo, data, emitente, valor, empresa, categoria, link, trecho, score, origem}]}
     """
@@ -887,31 +892,41 @@ def transcribe_audio(
     language: str | None = None,
     max_chars: int = 4000,
     force: bool = False,
+    segments: bool = False,
 ) -> str:
-    """Transcreve em texto um áudio do WhatsApp (voice note) ou um arquivo local.
+    """Transcreve em texto um áudio do WhatsApp (voice note), um vídeo ou um arquivo local.
 
     Use quando o usuário pedir o conteúdo de um áudio: "o que ele falou no áudio",
     "transcreva o áudio", "resuma os áudios de hoje". Mensagens de áudio aparecem
     em get_chat_messages/find_messages com type "audio" (voice=true para voice note).
-    O áudio é baixado e transcrito no servidor; só o texto volta. O resultado fica
+    Serve também para VÍDEO: o servidor lê a trilha de áudio de dentro do mp4, e isso
+    costuma responder sobre o vídeo por uma fração do custo de olhar a imagem. Para o
+    que aparece na tela, view_video.
+
+    O arquivo é baixado e transcrito no servidor; só o texto volta. O resultado fica
     em cache por message_id.
 
     Args:
-        message_id: id da mensagem de áudio (informe este OU file_path)
+        message_id: id da mensagem de áudio ou vídeo (informe este OU file_path)
         file_path: caminho de um áudio/vídeo já no disco
         language: idioma, ex: 'pt' (padrão: configuração ou detecção automática)
         max_chars: corte do texto devolvido (0 = sem corte)
         force: refaz a transcrição ignorando o cache
-    Returns: {text, backend, model, language, seconds, path, cached}
+        segments: devolve também os trechos com hora, para citar "no minuto 3:20..."
+                  ou para achar o ponto do vídeo a mostrar com view_video(start_s=...)
+    Returns: {text, backend, model, language, seconds, path, cached, segments?}
     """
     if bool(message_id) == bool(file_path):
         raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
     try:
         if message_id:
             return _out(client.transcribe_message(
-                message_id=message_id, language=language, max_chars=max_chars, force=force
+                message_id=message_id, language=language, max_chars=max_chars, force=force,
+                segments=segments,
             ))
-        return _out(client.transcribe_file(file_path=file_path, language=language, max_chars=max_chars))
+        return _out(client.transcribe_file(
+            file_path=file_path, language=language, max_chars=max_chars, segments=segments
+        ))
     except TranscriptionError as e:
         return _out({"error": str(e), "transcription": client.transcriber.describe()})
 
@@ -1155,6 +1170,91 @@ def view_media(
         "first_page": page,
     })
     return [resumo] + [Image(data=img, format="jpeg") for img in resultado["images"]]
+
+
+@mcp.tool()
+def view_video(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    frames: int = 4,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+) -> list:
+    """Mostra quadros do vídeo, para você VER o que ele mostra (tela gravada, cena, placa).
+
+    O servidor escolhe os quadros mais diferentes entre si ao longo do vídeo e devolve
+    cada um como imagem, com o instante em que aparece. Custa como imagem (1 a 2 mil
+    tokens por quadro), não como vídeo.
+
+    Para o que é FALADO no vídeo, transcribe_audio é muito mais barato e costuma bastar:
+    use view_video quando a resposta depender da imagem, ou quando o vídeo não tiver
+    falas. Para guardar os quadros e usar depois (Trello, build_pdf, envio), video_frames.
+
+    Args:
+        message_id: id da mensagem com o vídeo (`citada.id` ou um de `anexos_recentes`)
+        file_path: vídeo que já está no servidor
+        frames: quantos quadros (1 a 12; padrão 4)
+        start_s, end_s: trecho do vídeo, em segundos (padrão: o vídeo todo)
+    """
+    try:
+        caminho = _video_path(message_id, file_path)
+        saida = extract_frames(caminho, client.media_dir, frames=frames, start_s=start_s, end_s=end_s)
+    except (VideoError, ValueError) as e:
+        return [_out({"error": str(e)})]
+    resumo = _out({
+        "video_id": saida["video_id"],
+        **saida["info"],
+        "quadros": [{"id": q["id"], "tempo": q["tempo"]} for q in saida["quadros"]],
+    })
+    imagens = []
+    for quadro in saida["quadros"]:
+        imagens.append(Image(data=Path(quadro["arquivo"]).read_bytes(), format="jpeg"))
+    return [resumo] + imagens
+
+
+@mcp.tool()
+def video_frames(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    frames: int = 4,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+) -> str:
+    """Tira quadros do vídeo e grava no servidor, sem mandar imagem pela conversa.
+
+    Use quando os quadros forem virar outra coisa: foto para o card do Trello, imagem
+    dentro de um PDF (build_pdf aceita o `arquivo` devolvido aqui), envio por send_file
+    ou índice. Para VER o conteúdo você mesmo, view_video.
+
+    Args:
+        message_id: id da mensagem com o vídeo
+        file_path: vídeo que já está no servidor
+        frames: quantos quadros (1 a 12; padrão 4)
+        start_s, end_s: trecho do vídeo, em segundos
+    Returns: {video_id, pasta, arquivo, segundos, duracao, largura, altura, fps, audio,
+              quadros:[{id, t, tempo, arquivo}]}
+    """
+    try:
+        caminho = _video_path(message_id, file_path)
+        saida = extract_frames(caminho, client.media_dir, frames=frames, start_s=start_s, end_s=end_s)
+    except (VideoError, ValueError) as e:
+        return _out({"error": str(e)})
+    return _out({"video_id": saida["video_id"], "pasta": saida["pasta"], **saida["info"],
+                 "quadros": saida["quadros"]})
+
+
+def _video_path(message_id: str | None, file_path: str | None) -> str:
+    """Caminho do vídeo no servidor, baixando o anexo da mensagem quando preciso."""
+    if bool(message_id) == bool(file_path):
+        raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
+    if file_path:
+        if not is_video(None, file_path) and not Path(file_path).is_file():
+            raise ValueError(f"Arquivo não encontrado: {file_path}")
+        return file_path
+    baixado = client.download_media(message_id)
+    if not is_video(baixado.get("mime"), baixado.get("path")):
+        raise ValueError(f"a mensagem {message_id} não é vídeo (mime: {baixado.get('mime') or '?'})")
+    return baixado["path"]
 
 
 def get_media_base64(message_id: str) -> str:

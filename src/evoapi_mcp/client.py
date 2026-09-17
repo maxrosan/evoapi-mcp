@@ -1565,6 +1565,7 @@ class EvolutionClient:
         language: str | None = None,
         max_chars: int = 4000,
         force: bool = False,
+        segments: bool = False,
     ) -> dict[str, Any]:
         """Baixa (se preciso) e transcreve o áudio de uma mensagem.
 
@@ -1608,7 +1609,9 @@ class EvolutionClient:
                         f"A mensagem {message_id} não é áudio nem vídeo "
                         f"(mime: {downloaded.get('mime')})."
                     )
-            result = self.transcriber.transcribe(path, language)
+            # Sempre com trechos: eles saem de graça na mesma passada e ficam no cache,
+            # então "no minuto 3:20 ele diz X" não paga uma transcrição nova.
+            result = self.transcriber.transcribe(path, language, segments=True)
             result["path"] = str(path)
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1619,6 +1622,8 @@ class EvolutionClient:
         text, cut = truncate(result.get("text") or "", max_chars)
         out = dict(result)
         out["text"] = text
+        if not segments:
+            out.pop("segments", None)
         if cut:
             out["truncated"] = True
         if not text:
@@ -1630,12 +1635,13 @@ class EvolutionClient:
         file_path: str,
         language: str | None = None,
         max_chars: int = 4000,
+        segments: bool = False,
     ) -> dict[str, Any]:
         """Transcreve um arquivo de áudio/vídeo que já está no disco."""
         path = Path(os.path.expandvars(file_path)).expanduser()
         if not path.is_file():
             raise ValueError(f"Arquivo não encontrado: {file_path}")
-        result = self.transcriber.transcribe(path, language)
+        result = self.transcriber.transcribe(path, language, segments=segments)
         result["path"] = str(path)
         text, cut = truncate(result.get("text") or "", max_chars)
         result["text"] = text

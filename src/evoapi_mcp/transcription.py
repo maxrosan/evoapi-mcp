@@ -40,8 +40,39 @@ _ENV_KEYS = ("EVOLUTION_TRANSCRIBE_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY")
 _AUDIO_MIME_PREFIXES = ("audio/", "video/")
 
 
+# Quantos trechos com hora devolver: acima disso a lista passa a custar mais
+# tokens do que o próprio texto.
+MAX_SEGMENTS = 200
+
+
 class TranscriptionError(Exception):
     """Erro ao transcrever um áudio."""
+
+
+def clock(seconds: float | None) -> str:
+    """12.0 -> '0:12'; 3742.5 -> '1:02:22'."""
+    total = int(round(max(float(seconds or 0), 0)))
+    h, resto = divmod(total, 3600)
+    m, s = divmod(resto, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _trechos(itens) -> list[dict[str, Any]]:
+    """[(inicio, fim, texto)] -> [{t, tempo, fim, texto}], sem trecho vazio."""
+    saida = []
+    for inicio, fim, texto in itens:
+        texto = (texto or "").strip()
+        if not texto:
+            continue
+        saida.append({
+            "t": round(float(inicio or 0), 1),
+            "tempo": clock(inicio),
+            "fim": round(float(fim or 0), 1),
+            "texto": texto,
+        })
+        if len(saida) >= MAX_SEGMENTS:
+            break
+    return saida
 
 
 def _log(message: str, level: str = "INFO") -> None:
@@ -146,16 +177,18 @@ class Transcriber:
 
     # -------------------------------------------------------------- transcribe
 
-    def transcribe(self, path: Path, language: str | None = None) -> dict[str, Any]:
+    def transcribe(self, path: Path, language: str | None = None,
+                   segments: bool = False) -> dict[str, Any]:
         """Transcreve um arquivo de áudio/vídeo.
 
         Args:
             path: Caminho do arquivo já em disco
             language: Código ISO (ex: 'pt'); None usa EVOLUTION_TRANSCRIBE_LANGUAGE
                       e, se vazio, deixa o modelo detectar
+            segments: devolve também os trechos com hora ("no minuto 3:20 ele diz X")
 
         Returns:
-            dict: {text, backend, model, language?, seconds?}
+            dict: {text, backend, model, language?, seconds?, segments?}
 
         Raises:
             TranscriptionError: Sem backend disponível ou falha na transcrição
@@ -176,15 +209,17 @@ class Transcriber:
         lang = (language or self.language or "").strip() or None
         _log(f"Transcrevendo {path.name} ({size_mb:.2f} MB) via {backend}/{self.model}")
 
-        result = self._transcribe_api(path, lang) if backend == "api" else self._transcribe_local(path, lang)
+        result = (self._transcribe_api(path, lang, segments) if backend == "api"
+                  else self._transcribe_local(path, lang, segments))
         result.setdefault("backend", backend)
         result.setdefault("model", self.model)
         return result
 
-    def _transcribe_api(self, path: Path, language: str | None) -> dict[str, Any]:
+    def _transcribe_api(self, path: Path, language: str | None,
+                        segments: bool = False) -> dict[str, Any]:
         url = self.api_url or _DEFAULT_API_URL
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        data = {"model": self.model, "response_format": "json"}
+        data = {"model": self.model, "response_format": "verbose_json" if segments else "json"}
         if language:
             data["language"] = language
 
@@ -215,6 +250,10 @@ class Transcriber:
         text = (payload.get("text") if isinstance(payload, dict) else None) or ""
         out: dict[str, Any] = {"text": text.strip()}
         if isinstance(payload, dict):
+            if segments and isinstance(payload.get("segments"), list):
+                out["segments"] = _trechos(
+                    (s.get("start"), s.get("end"), s.get("text")) for s in payload["segments"]
+                )
             if payload.get("language"):
                 out["language"] = payload["language"]
             if payload.get("duration"):
@@ -224,7 +263,8 @@ class Transcriber:
                     pass
         return out
 
-    def _transcribe_local(self, path: Path, language: str | None) -> dict[str, Any]:
+    def _transcribe_local(self, path: Path, language: str | None,
+                          segments: bool = False) -> dict[str, Any]:
         try:
             from faster_whisper import WhisperModel
         except ImportError:
@@ -238,12 +278,15 @@ class Transcriber:
                 raise TranscriptionError(f"Falha ao carregar o modelo '{self.model}': {e}")
 
         try:
-            segments, info = self._local_model.transcribe(str(path), language=language, vad_filter=True)
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            trechos, info = self._local_model.transcribe(str(path), language=language, vad_filter=True)
+            trechos = list(trechos)                      # gerador: só aqui a transcrição roda
+            text = " ".join(t.text.strip() for t in trechos).strip()
         except Exception as e:
             raise TranscriptionError(f"Falha ao transcrever {path.name}: {e}")
 
         out: dict[str, Any] = {"text": text}
+        if segments:
+            out["segments"] = _trechos((t.start, t.end, t.text) for t in trechos)
         if getattr(info, "language", None):
             out["language"] = info.language
         if getattr(info, "duration", None):

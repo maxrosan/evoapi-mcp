@@ -33,11 +33,14 @@ class StubTranscriber:
         self.error = error
         self.calls = []
 
-    def transcribe(self, path, language=None):
-        self.calls.append({"path": Path(path), "language": language})
+    def transcribe(self, path, language=None, segments=False):
+        self.calls.append({"path": Path(path), "language": language, "segments": segments})
         if self.error:
             raise TranscriptionError(self.error)
-        return {"text": self.text, "backend": "stub", "model": "stub-1", "language": "pt", "seconds": 4.2}
+        saida = {"text": self.text, "backend": "stub", "model": "stub-1", "language": "pt", "seconds": 4.2}
+        if segments:
+            saida["segments"] = [{"t": 0.0, "tempo": "0:00", "fim": 4.2, "texto": self.text}]
+        return saida
 
     def describe(self):
         return {"backend": "stub", "available": True, "model": "stub-1"}
@@ -293,3 +296,36 @@ def test_download_media_extract_text_reports_transcription_error(client):
     out = client.download_media("VOICE6", extract_text=True)
     assert out["text_error"] == "Nenhum backend de transcrição configurado."
     assert "text" not in out
+
+
+# --- trechos com hora --------------------------------------------------------
+
+def test_segments_come_from_the_cache_without_transcribing_again(audio_client):
+    """Os trechos saem de graça na mesma passada, então ficam no cache."""
+    audio_client.responses.append(audio_payload())
+    primeira = audio_client.transcribe_message("MSG_SEG")
+    assert "segments" not in primeira                            # sem pedir, não ocupa a resposta
+    assert audio_client.transcriber.calls[-1]["segments"] is True  # mas foram calculados
+
+    com_trechos = audio_client.transcribe_message("MSG_SEG", segments=True)
+    assert com_trechos["cached"] is True and len(audio_client.transcriber.calls) == 1
+    assert com_trechos["segments"][0]["tempo"] == "0:00"
+
+
+def test_transcribe_file_can_ask_for_segments(audio_client, tmp_path):
+    arquivo = tmp_path / "video.mp4"
+    arquivo.write_bytes(b"dados")
+    saida = audio_client.transcribe_file(str(arquivo), segments=True)
+    assert saida["segments"] and audio_client.transcriber.calls[-1]["segments"] is True
+
+
+def test_clock_and_trechos_are_readable():
+    from evoapi_mcp.transcription import MAX_SEGMENTS, _trechos, clock
+
+    assert clock(0) == "0:00" and clock(75.4) == "1:15" and clock(3742) == "1:02:22"
+    trechos = _trechos([(0, 2.5, " oi "), (2.5, 4, ""), (4, 6, "tudo bem")])
+    assert trechos == [
+        {"t": 0.0, "tempo": "0:00", "fim": 2.5, "texto": "oi"},
+        {"t": 4.0, "tempo": "0:04", "fim": 6.0, "texto": "tudo bem"},
+    ]
+    assert len(_trechos((i, i + 1, f"t{i}") for i in range(MAX_SEGMENTS + 50))) == MAX_SEGMENTS

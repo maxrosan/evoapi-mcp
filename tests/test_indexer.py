@@ -337,3 +337,83 @@ def test_describe(amb):
     assert (d["ativo"], d["documentos"], d["ocr"], d["busca_visual"]) == (True, 0, True, True)
     assert d["copia_drive"] == "INDEXADOS/AAAA/MM.AAAA"
     assert set(d["filas"]) == {"rapida", "pesada"}
+
+
+# --- vídeo -------------------------------------------------------------------
+
+def _indice_video(tmp_path, transcricao="A obra começou hoje", ocr_ok=True, visual=True, falha=None):
+    from pathlib import Path
+
+    client = FakeClient(tmp_path)
+    quadros = []
+
+    def falsos_quadros(caminho, pasta, frames=4, **kwargs):
+        destino = Path(pasta) / "video" / "abc123"
+        destino.mkdir(parents=True, exist_ok=True)
+        quadros.clear()
+        for n in range(frames):
+            arquivo = destino / f"frame{n + 1}.jpg"
+            arquivo.write_bytes(b"jpeg")
+            quadros.append({"id": f"frame{n + 1}", "t": 10.0 * n, "tempo": f"0:{10 * n:02d}",
+                            "arquivo": str(arquivo)})
+        return {"video_id": "abc123", "pasta": str(destino), "info": {"segundos": 40.0}, "quadros": quadros}
+
+    def falsa_transcricao(file_path, max_chars=0):
+        if falha:
+            raise RuntimeError(falha)
+        return {"text": transcricao, "seconds": 40.0}
+
+    idx = DocumentIndex(
+        MemoryStore(), client, FakeEmbedder(), FakeVisual() if visual else None, JobQueues(sync=True),
+        ocr=FakeOcr(ok=ocr_ok), transcribe=lambda caminho: falsa_transcricao(str(caminho)),
+        extract_frames=falsos_quadros,
+    )
+    caminho = tmp_path / "obra.mp4"
+    caminho.write_bytes(b"video de teste")
+    return idx, idx.request(file_path=str(caminho), wait_s=5), quadros
+
+
+def test_video_entra_no_indice_com_fala_e_quadros(tmp_path):
+    idx, r, quadros = _indice_video(tmp_path)
+    assert r["status"] == "done" and r["tipo"] == "video"
+    assert len(quadros) == 4
+
+    arquivo = idx.store.get_indexed_file(r["id"])
+    assert arquivo["kind"] == "video"
+    assert "A obra começou hoje" in arquivo["text"]          # o que foi falado
+    assert "[0:10]" in arquivo["text"]                       # OCR do quadro, com a hora
+    assert arquivo["visual_embedding"] is not None           # achável pelo que mostra
+
+    assert idx.search(query="obra")[0]["id"] == r["id"]
+    assert idx.search(visual_query="a construction site")[0]["id"] == r["id"]
+    assert idx.search(query="obra", tipo="video")
+
+
+def test_video_sem_fala_ainda_guarda_os_quadros(tmp_path):
+    idx, r, _ = _indice_video(tmp_path, transcricao="")
+    assert r["status"] == "done"
+    assert "sem fala reconhecida" in (r.get("aviso") or "")
+    assert idx.store.get_indexed_file(r["id"])["text"]      # sobrou o OCR dos quadros
+
+
+def test_video_com_transcricao_quebrada_nao_derruba_o_indice(tmp_path):
+    idx, r, _ = _indice_video(tmp_path, falha="modelo indisponível")
+    assert r["status"] == "done"
+    assert "transcrição falhou" in (r.get("aviso") or "")
+    assert idx.store.get_indexed_file(r["id"])["visual_embedding"] is not None
+
+
+def test_video_sem_ocr_e_sem_visual_avisa(tmp_path):
+    idx, r, _ = _indice_video(tmp_path, ocr_ok=False, visual=False)
+    assert r["status"] == "done"
+    assert "OCR indisponível" in r["aviso"] and "busca visual indisponível" in r["aviso"]
+    assert "A obra começou hoje" in idx.store.get_indexed_file(r["id"])["text"]
+
+
+def test_kind_of_reconhece_video():
+    from evoapi_mcp.indexer import kind_of
+
+    assert kind_of("video/mp4", "x.mp4") == "video"
+    assert kind_of(None, "gravacao.MOV") == "video"
+    assert kind_of(None, "nota.pdf") == "pdf"
+    assert kind_of("application/zip", "pacote.zip") is None

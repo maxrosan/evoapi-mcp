@@ -34,6 +34,8 @@ audio = [
 image = [
     "pypdfium2>=4.30.0",
     "pillow>=10.0.0",
+    # Quadros de vídeo (video.py). Já vem junto do faster-whisper, mas aqui fica explícito.
+    "av>=11.0.0",
 ]
 # Separado de [image] porque, ao contrário de pypdfium2, cairosvg depende da
 # libcairo do sistema (apt install libcairo2). Quem instala sem ela recebe um

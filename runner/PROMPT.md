@@ -78,6 +78,15 @@ nada para obter o que já está escrito neste prompt.
         que não deu para atender: diga qual e por quê.
      Use `view_media` só se precisar ver uma foto ou a diagramação de uma página.
    - **PDF novo** ("gera um PDF com..."): `build_pdf` com os blocos e `number` do chat.
+   - **Vídeo**: o que foi FALADO sai por `transcribe_audio(message_id=...)`, que lê a
+     trilha de áudio de dentro do vídeo — é o caminho barato e resolve a maioria dos
+     pedidos ("o que ele falou no vídeo?", "resuma esse vídeo"). Só use `view_video`
+     quando a resposta depender da IMAGEM (tela gravada, placa, o que aparece) ou
+     quando não houver fala; ele devolve poucos quadros, escolhidos pelo servidor.
+     `segments=True` na transcrição dá a hora de cada trecho, e serve para mirar
+     `view_video(start_s=...)` no ponto certo. Para o quadro virar arquivo (foto no
+     card do Trello, imagem dentro de um PDF, envio), `video_frames` grava no servidor
+     e devolve o caminho. Vídeo no Drive ou no Trello continua com `save_to_drive`.
    - Card, tarefa ou registro criado a partir de imagem: descreva nele o que a imagem
      mostra, porque quem abrir não vê o WhatsApp.
 3. Responda **no mesmo chat** de cada pendência e depois chame `mark_triggers_handled`

@@ -56,6 +56,7 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
 - ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
 - ✅ `open_pdf` + `build_pdf` revisam um PDF: desmonta em texto e imagens com id, remonta com as fotos originais
+- ✅ `view_video` / `video_frames` veem o vídeo por poucos quadros escolhidos, e `transcribe_audio` lê a fala de dentro do mp4
 - ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
 - ✅ Tools de base64 escondidas por padrão: o caminho caro não fica à mão sem querer
 - ✅ A regra de "qual tool usar" viaja no próprio servidor (instructions do MCP)
@@ -173,6 +174,25 @@ está na web, `send_image` com a URL (aí quem baixa é a Evolution, e o custo �
 
 Requer o extra `[svg]` (cairosvg) e, no sistema, a `libcairo2` — já incluída na imagem
 Docker. Sem ela, a tool devolve um erro dizendo o que instalar em vez de quebrar.
+
+### Vídeo: a fala e a imagem
+
+A trilha de áudio de um vídeo já era lida por `transcribe_audio` (o Whisper local abre o
+mp4 direto, sem ffmpeg à parte); `segments=True` devolve os trechos com hora. A imagem
+vem por amostragem:
+
+```
+view_video(message_id="...", frames=4)          # quadros como imagem, para você ver
+video_frames(message_id="...", frames=4)        # os mesmos quadros gravados em disco
+```
+
+O servidor amostra candidatos ao longo do vídeo e entrega os mais DIFERENTES entre si —
+numa gravação parada, seis quadros iguais não dizem nada. Cada quadro custa como uma
+imagem (1 a 2 mil tokens), contra o milhão de caracteres do vídeo em base64. Os arquivos
+ficam em `<EVOLUTION_MEDIA_DIR>/video/<video_id>/`, então servem de foto para um card, de
+imagem dentro de `build_pdf` ou de anexo em `send_file`. `index_media` aceita vídeo: guarda
+a fala transcrita, o OCR de alguns quadros (com a hora) e um vetor visual, e depois o vídeo
+aparece em `search_documents` tanto pelo que foi dito quanto pelo que mostra.
 
 ### PDF revisado ("ajusta esse relatório com base nos comentários")
 

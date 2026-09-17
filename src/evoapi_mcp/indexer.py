@@ -9,7 +9,9 @@ fila rápida
   4. PDF com texto e arquivo de texto: extrai, divide em trechos, gera vetores.
 fila pesada
   5. PDF escaneado: renderiza as páginas e faz OCR;
-  6. imagem: OCR do texto que houver e vetor visual (CLIP), para achar pelo que mostra.
+  6. imagem: OCR do texto que houver e vetor visual (CLIP), para achar pelo que mostra;
+  7. vídeo: transcrição da fala, OCR de alguns quadros e vetor visual de um quadro,
+     para achar depois pelo que foi dito ou pelo que aparece na tela.
 
 Do nome no padrão do arquivamento ("15.08.2026 - Aldann (Lote 392) - R$ 490,15.pdf")
 saem data, emitente e valor, e da pasta saem empresa e categoria: filtros exatos,
@@ -34,6 +36,7 @@ from evoapi_mcp import ocr as ocr_padrao
 from evoapi_mcp.jobs import PESADA, RAPIDA
 from evoapi_mcp.memory import _plain
 from evoapi_mcp.vectors import VectorSet
+from evoapi_mcp.video import extract_frames as _extract_frames, is_video, tempo
 from evoapi_mcp.visual import MIN_VISUAL_SCORE
 
 CHUNK_CHARS = 900
@@ -47,9 +50,14 @@ MAX_FULL_TEXT = 200_000
 DRIVE_FOLDER = "INDEXADOS"
 MAX_RESULTS = 20
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+# Quadros indexados por vídeo: o bastante para cobrir as cenas sem encher a fila.
+VIDEO_FRAMES = 4
 TEXT_EXT = {".txt", ".csv", ".md", ".json", ".xml"}
 
-_EXTENSAO = re.compile(r"\.(pdf|png|jpe?g|webp|gif|bmp|tiff?|txt|csv|md|json|xml)$", re.IGNORECASE)
+_EXTENSAO = re.compile(
+    r"\.(pdf|png|jpe?g|webp|gif|bmp|tiff?|txt|csv|md|json|xml|mp4|mov|webm|mkv|avi|m4v|3gp|mpe?g)$",
+    re.IGNORECASE,
+)
 _NOME = re.compile(r"^\s*(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(.+?)\s*-\s*R\$\s*([\d.]+,\d{2})\s*$")
 _DATA = re.compile(r"^\s*(\d{2})\.(\d{2})\.(\d{4})")
 
@@ -140,6 +148,8 @@ def kind_of(mime: str | None, path: str | Path) -> str | None:
         return "image"
     if m.startswith("text/") or ext in TEXT_EXT:
         return "text"
+    if is_video(m, path):
+        return "video"
     return None
 
 
@@ -182,6 +192,8 @@ class DocumentIndex:
         ocr_lang: str = "por+eng",
         render_pdf: Callable[[str | Path, int, str | None], list[bytes]] = _render_pdf_pages,
         fetch: Callable[[str], dict] | None = None,
+        transcribe: Callable[[str | Path], dict] | None = None,
+        extract_frames: Callable[..., dict] = _extract_frames,
     ):
         self.store = store
         self.client = client
@@ -194,6 +206,8 @@ class DocumentIndex:
         self.ocr_lang = ocr_lang
         self.render_pdf = render_pdf
         self._fetch = fetch
+        self._transcribe = transcribe
+        self.extract_frames = extract_frames
         self.texts = VectorSet()
         self.visuals = VectorSet()
         self._arquivos: dict[int, dict[str, Any]] = {}
@@ -387,6 +401,8 @@ class DocumentIndex:
                     usou_ocr = True
                 else:
                     avisos.append("PDF sem camada de texto e OCR indisponível")
+            elif tipo == "video":
+                texto, usou_ocr = self._indexar_video(fid, caminho, avisos)
             elif tipo == "image":
                 if self.ocr.available():
                     texto = self.ocr.ocr_image(caminho, lang=self.ocr_lang)
@@ -413,6 +429,63 @@ class DocumentIndex:
         except Exception as e:
             self._falhar(fid, str(e))
             raise
+
+    def _indexar_video(self, fid: int, caminho: Path, avisos: list[str]) -> tuple[str, bool]:
+        """Fala transcrita + OCR de alguns quadros; o vetor visual sai de um quadro do meio."""
+        partes: list[str] = []
+        usou_ocr = False
+        try:
+            fala = self._transcrever(caminho)
+        except Exception as e:
+            avisos.append(f"transcrição falhou: {_corta(str(e), 120)}")
+        else:
+            if (fala.get("text") or "").strip():
+                partes.append(fala["text"].strip())
+            else:
+                avisos.append("vídeo sem fala reconhecida")
+
+        pasta = Path(getattr(self.client, "media_dir", None) or caminho.parent)
+        try:
+            quadros = self.extract_frames(caminho, pasta, frames=VIDEO_FRAMES)["quadros"]
+        except Exception as e:                       # VideoError, PyAV ausente, arquivo corrompido
+            avisos.append(f"quadros do vídeo: {_corta(str(e), 120)}")
+            return "\n\n".join(partes).strip(), usou_ocr
+
+        if self.ocr.available():
+            for quadro in quadros:
+                try:
+                    lido = (self.ocr.ocr_image(Path(quadro["arquivo"]), lang=self.ocr_lang) or "").strip()
+                except Exception as e:
+                    avisos.append(f"OCR do quadro {quadro['id']}: {_corta(str(e), 80)}")
+                    continue
+                usou_ocr = True
+                if lido:
+                    partes.append(f"[{tempo(quadro['t'])}] {lido}")
+        else:
+            avisos.append("OCR indisponível")
+
+        if self.visual_ativo and quadros:
+            meio = quadros[len(quadros) // 2]
+            try:
+                vetor = self.visual.embed_image(Path(meio["arquivo"]))
+            except Exception as e:
+                avisos.append(f"busca visual falhou: {_corta(str(e), 80)}")
+            else:
+                self.store.update_indexed_file(fid, visual_embedding=[float(x) for x in vetor])
+                if self._carregado:
+                    self.visuals.remove_where(lambda item: item.get("id") == fid)
+                    self.visuals.add({"id": fid}, vetor, "")
+        elif not self.visual_ativo:
+            avisos.append("busca visual indisponível")
+        return "\n\n".join(partes).strip(), usou_ocr
+
+    def _transcrever(self, caminho: Path) -> dict[str, Any]:
+        if self._transcribe is not None:
+            return self._transcribe(caminho)
+        transcrever = getattr(self.client, "transcribe_file", None)
+        if transcrever is None:
+            raise IndexerError("transcrição indisponível neste servidor")
+        return transcrever(file_path=str(caminho), max_chars=0)
 
     def _gravar_texto(self, fid: int, texto: str, nome: str) -> None:
         partes = chunk_text(texto)
