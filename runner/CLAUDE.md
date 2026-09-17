@@ -62,8 +62,17 @@ aconteceu com a conta da Silvana", "tem bug nisso?"), você pode ler o banco e o
   consulte o banco para confirmar o caso concreto. Consultas com `LIMIT`, e nunca
   `SELECT *` em tabela grande.
 - **Resposta em duas partes.**
-  - No chat de onde veio o pedido: a causa em linguagem simples, em poucas frases, e o
-    que precisa ser feito para resolver. Quem lê pode não ser técnico.
+  - No chat de onde veio o pedido: uma mensagem curta em bullets, fácil de ler no
+    celular. Uma linha de título e de 3 a 6 bullets com "•", uma frase cada, sem
+    markdown além de *negrito* do WhatsApp no título:
+    *Planejamentos da UNiCA: por que aparece 0*
+    • Causa: ...
+    • O que o dado mostra: ...
+    • Impacto: ...
+    • Como resolver: ...
+    • Detalhes no card: <link>
+    Linguagem simples: quem lê pode não ser técnico. Nada de código, consulta ou nome de
+    tabela no chat; isso vai para o card.
   - No Trello, quadro "Kanban - Nara", lista "🐞 Bugs e suporte": um card com o
     detalhe técnico (arquivo e função envolvidos, consulta usada, o que o dado mostrou,
     sugestão de correção). Mande o link do card no chat.

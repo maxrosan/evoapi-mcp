@@ -63,6 +63,38 @@ BACKOFF_S = float(os.environ.get("BACKOFF_S", "300") or 300)
 # Espera antes de acordar o Claude: Max costuma mandar a foto e o texto em sequência,
 # às vezes o texto primeiro. Sem esta pausa o acionamento sai com metade da conversa.
 SETTLE_SECONDS = float(os.environ.get("SETTLE_SECONDS", "8") or 0)
+# Investigação de bug vai para um modelo maior; o resto segue no CLAUDE_MODEL, mais barato.
+INVESTIGATION_MODEL = os.environ.get("INVESTIGATION_MODEL", "opus").strip() or CLAUDE_MODEL
+INVESTIGATION_TIMEOUT_S = float(os.environ.get("INVESTIGATION_TIMEOUT_S", "900") or 900)
+# Trechos (sem acento, minúsculas) que marcam um pedido de investigação. "opus" em
+# qualquer pedido força o modelo maior. Separados por vírgula no .env para trocar.
+_PADRAO_INVESTIGACAO = (
+    r"\binvestig, \bpor que\b, \bbugs?\b, \berros?\b, \bfalh, \bquebr, \bnao (esta )?funciona, "
+    r"\bdiagnost, \bopus\b"
+)
+INVESTIGATION_PATTERNS = [
+    p.strip() for p in os.environ.get("INVESTIGATION_PATTERNS", _PADRAO_INVESTIGACAO).split(",") if p.strip()
+]
+
+
+def _sem_acento(texto: str) -> str:
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", (texto or "").casefold())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def escolher_modelo(pendentes: list[dict]) -> tuple[str, float, str | None]:
+    """(modelo, tempo máximo, trecho que decidiu). Uma pendência de investigação basta."""
+    import re
+
+    for pendencia in pendentes or []:
+        texto = _sem_acento(" ".join(str(pendencia.get(c) or "") for c in ("instrucao", "respondendo_a")))
+        for padrao in INVESTIGATION_PATTERNS:
+            achado = re.search(padrao, texto)
+            if achado:
+                return INVESTIGATION_MODEL, max(CLAUDE_TIMEOUT_S, INVESTIGATION_TIMEOUT_S), achado.group(0)
+    return CLAUDE_MODEL, CLAUDE_TIMEOUT_S, None
 CLAUDE_BIN = (
     os.environ.get("CLAUDE_BIN")
     or shutil.which("claude")
@@ -246,7 +278,8 @@ def escrever_mcp_config() -> Path:
     return caminho
 
 
-def acordar_claude(contexto: str | None = None) -> dict:
+def acordar_claude(contexto: str | None = None, modelo: str | None = None,
+                   timeout_s: float | None = None) -> dict:
     """Roda `claude -p` uma vez. Devolve o resumo do resultado."""
     # A sessão nasce sem relógio: sem esta linha, "amanhã às 9h" não tem referência.
     from datetime import datetime
@@ -267,7 +300,7 @@ def acordar_claude(contexto: str | None = None) -> dict:
         permitidas = permitidas + ["Grep", "Glob"]
     cmd = [
         CLAUDE_BIN, "-p", prompt,
-        "--model", CLAUDE_MODEL,
+        "--model", modelo or CLAUDE_MODEL,
         "--mcp-config", str(escrever_mcp_config()),
         *([] if EXTRA_MCP_SERVERS else ["--strict-mcp-config"]),
         "--permission-mode", "dontAsk",
@@ -280,10 +313,10 @@ def acordar_claude(contexto: str | None = None) -> dict:
     try:
         r = subprocess.run(
             cmd, cwd=AQUI, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=CLAUDE_TIMEOUT_S, env=ambiente_limpo(), stdin=subprocess.DEVNULL,
+            timeout=timeout_s or CLAUDE_TIMEOUT_S, env=ambiente_limpo(), stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        return {"erro": f"tempo esgotado após {int(CLAUDE_TIMEOUT_S)} s"}
+        return {"erro": f"tempo esgotado após {int(timeout_s or CLAUDE_TIMEOUT_S)} s"}
     duracao = round(time.time() - inicio)
     try:
         saida = json.loads(r.stdout)
@@ -313,6 +346,7 @@ def main() -> int:
     log.info("executor ativo: consulta a cada %ss, modelo %s, claude em %s, servidores extras: %s",
              POLL_SECONDS, CLAUDE_MODEL, CLAUDE_BIN, ", ".join(EXTRA_MCP_SERVERS) or "nenhum")
     log.info("pastas de código: %s", ", ".join(CODE_DIRS) or "nenhuma")
+    log.info("investigações: modelo %s, até %ss", INVESTIGATION_MODEL, int(INVESTIGATION_TIMEOUT_S))
 
     mcp = Mcp(MCP_URL, MCP_AUTH_TOKEN)
     travados_seguidos = 0
@@ -359,14 +393,17 @@ def main() -> int:
             log.warning("contexto do servidor indisponível (%s); o Claude busca sozinho", e)
             contexto = None
             mcp.sid = None
-        res = acordar_claude(contexto)
+        modelo, limite_s, motivo = escolher_modelo(pend)
+        if motivo:
+            log.info("pedido de investigação (%r): modelo %s, até %ss", motivo, modelo, int(limite_s))
+        res = acordar_claude(contexto, modelo=modelo, timeout_s=limite_s)
         if res.get("erro"):
-            log.error("acionamento falhou (%ss): %s", res.get("s"), res["erro"])
+            log.error("acionamento falhou (modelo %s, %ss): %s", modelo, res.get("s"), res["erro"])
         else:
             negados = f", negados: {res['negados']}" if res.get("negados") else ""
             log.info(
-                "acionamento ok: %s turnos, %ss, US$ %s%s | %s",
-                res.get("turnos"), res.get("s"), res.get("custo_usd"), negados,
+                "acionamento ok (modelo %s): %s turnos, %ss, US$ %s%s | %s",
+                modelo, res.get("turnos"), res.get("s"), res.get("custo_usd"), negados,
                 res.get("resultado", "").replace("\n", " "),
             )
 
