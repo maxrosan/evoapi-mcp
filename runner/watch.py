@@ -75,6 +75,45 @@ CLAUDE_BIN = (
 # configurados na máquina são carregados; só os listados aqui ficam liberados.
 EXTRA_MCP_SERVERS = [s.strip() for s in os.environ.get("EXTRA_MCP_SERVERS", "").split(",") if s.strip()]
 BASE_TOOLS = ["mcp__evoapi", "Skill", "Read", "WebSearch", "WebFetch"]
+# Pastas de código que o Claude pode ler e buscar, para investigar bugs (ex: o NARA).
+# Só leitura: Read, Grep e Glob. Fora delas e do próprio runner, nada é acessível.
+CODE_DIRS = [
+    str(Path(d.strip()).expanduser()) for d in os.environ.get("CODE_DIRS", "").replace(";", ",").split(",")
+    if d.strip() and Path(d.strip()).expanduser().is_dir()
+]
+CODE_PULL_EVERY_S = float(os.environ.get("CODE_PULL_EVERY_S", "900") or 900)
+# Arquivos de segredo nunca são lidos, mesmo dentro das pastas liberadas: uma
+# investigação responde numa conversa com outras pessoas.
+SECRET_PATTERNS = [".env*", "*.pem", "*.key", "*.p12", "*.pfx", "credentials*.json", "*secret*", "id_rsa*"]
+
+
+def _regras_de_segredo(pastas: list[str]) -> list[str]:
+    regras = []
+    for pasta in pastas:
+        base = "//" + pasta.replace("\\", "/").replace(":", "").lstrip("/")   # D:/x -> //D/x
+        for padrao in SECRET_PATTERNS:
+            for ferramenta in ("Read", "Grep", "Glob"):
+                regras.append(f"{ferramenta}({base}/**/{padrao})")
+    return regras
+
+
+_ultimo_pull: dict[str, float] = {}
+
+
+def atualizar_codigo() -> None:
+    """git pull nas pastas de código, no máximo a cada CODE_PULL_EVERY_S."""
+    agora = time.time()
+    for pasta in CODE_DIRS:
+        if agora - _ultimo_pull.get(pasta, 0) < CODE_PULL_EVERY_S or not (Path(pasta) / ".git").exists():
+            continue
+        _ultimo_pull[pasta] = agora
+        try:
+            r = subprocess.run(["git", "-C", pasta, "pull", "--ff-only", "--quiet"], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
+            if r.returncode != 0:
+                log.warning("git pull em %s falhou: %s", pasta, (r.stderr or r.stdout).strip()[:300])
+        except Exception as e:
+            log.warning("git pull em %s falhou: %s", pasta, e)
 
 
 def configurar_log() -> None:
@@ -224,6 +263,8 @@ def acordar_claude(contexto: str | None = None) -> dict:
             + contexto + "\n```\n"
         )
     permitidas = BASE_TOOLS + [f"mcp__{nome}" for nome in EXTRA_MCP_SERVERS]
+    if CODE_DIRS:
+        permitidas = permitidas + ["Grep", "Glob"]
     cmd = [
         CLAUDE_BIN, "-p", prompt,
         "--model", CLAUDE_MODEL,
@@ -231,6 +272,8 @@ def acordar_claude(contexto: str | None = None) -> dict:
         *([] if EXTRA_MCP_SERVERS else ["--strict-mcp-config"]),
         "--permission-mode", "dontAsk",
         "--allowedTools", *permitidas,
+        *[arg for pasta in CODE_DIRS for arg in ("--add-dir", pasta)],
+        *(["--disallowedTools", *_regras_de_segredo(CODE_DIRS)] if CODE_DIRS else []),
         "--output-format", "json",
     ]
     inicio = time.time()
@@ -269,6 +312,7 @@ def main() -> int:
         return 0
     log.info("executor ativo: consulta a cada %ss, modelo %s, claude em %s, servidores extras: %s",
              POLL_SECONDS, CLAUDE_MODEL, CLAUDE_BIN, ", ".join(EXTRA_MCP_SERVERS) or "nenhum")
+    log.info("pastas de código: %s", ", ".join(CODE_DIRS) or "nenhuma")
 
     mcp = Mcp(MCP_URL, MCP_AUTH_TOKEN)
     travados_seguidos = 0
@@ -303,6 +347,8 @@ def main() -> int:
             log.error("Claude Code não está logado. Rode `claude auth login` num terminal. Tentando de novo em %ss", BACKOFF_S)
             time.sleep(BACKOFF_S)
             continue
+
+        atualizar_codigo()
 
         # O servidor monta numa chamada o que o Claude gastaria várias voltas buscando.
         contexto = None
