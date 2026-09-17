@@ -107,6 +107,9 @@ CLAUDE_BIN = (
 # configurados na máquina são carregados; só os listados aqui ficam liberados.
 EXTRA_MCP_SERVERS = [s.strip() for s in os.environ.get("EXTRA_MCP_SERVERS", "").split(",") if s.strip()]
 BASE_TOOLS = ["mcp__evoapi", "Skill", "Read", "WebSearch", "WebFetch"]
+# Quantas vezes recomeçar o `claude -p` quando um servidor liberado (Trello, Gmail...)
+# não conectou a tempo. O recomeço acontece antes do primeiro turno, então não custa.
+MCP_START_RETRIES = int(os.environ.get("MCP_START_RETRIES", "2") or 0)
 # Pastas de código que o Claude pode ler e buscar, para investigar bugs (ex: o NARA).
 # Só leitura: Read, Grep e Glob. Fora delas e do próprio runner, nada é acessível.
 CODE_DIRS = [
@@ -253,6 +256,10 @@ def ambiente_limpo() -> dict:
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(k, None)
     env["PYTHONIOENCODING"] = "utf-8"
+    # Sem isto o `claude -p` conecta os servidores MCP em segundo plano e manda o
+    # primeiro turno antes: se o Trello conectar 1 s depois, a sessão inteira fica
+    # sem ele (a lista de ferramentas não é refeita no meio da execução).
+    env["MCP_CONNECTION_NONBLOCKING"] = "false"
     return env
 
 
@@ -307,21 +314,28 @@ def acordar_claude(contexto: str | None = None, modelo: str | None = None,
         "--allowedTools", *permitidas,
         *[arg for pasta in CODE_DIRS for arg in ("--add-dir", pasta)],
         *(["--disallowedTools", *_regras_de_segredo(CODE_DIRS)] if CODE_DIRS else []),
-        "--output-format", "json",
+        "--output-format", "stream-json", "--verbose",
     ]
+    limite = timeout_s or CLAUDE_TIMEOUT_S
+    exigidos = servidores_exigidos(permitidas)
     inicio = time.time()
-    try:
-        r = subprocess.run(
-            cmd, cwd=AQUI, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout_s or CLAUDE_TIMEOUT_S, env=ambiente_limpo(), stdin=subprocess.DEVNULL,
-        )
-    except subprocess.TimeoutExpired:
-        return {"erro": f"tempo esgotado após {int(timeout_s or CLAUDE_TIMEOUT_S)} s"}
+    for tentativa in range(1, MCP_START_RETRIES + 2):
+        ultima = tentativa > MCP_START_RETRIES
+        r = rodar_claude(cmd, limite, exigidos, abortar_se_faltar=not ultima)
+        if r["ausentes"] and not ultima:
+            log.warning("servidores MCP fora da sessão (%s); recomeçando antes do primeiro turno (%d/%d)",
+                        ", ".join(r["ausentes"]), tentativa, MCP_START_RETRIES)
+            time.sleep(5)
+            continue
+        break
     duracao = round(time.time() - inicio)
-    try:
-        saida = json.loads(r.stdout)
-    except ValueError:
-        return {"erro": f"saída inesperada (código {r.returncode}): {(r.stdout or r.stderr)[:400]}", "s": duracao}
+    if r["ausentes"]:
+        log.warning("seguindo sem: %s", ", ".join(r["ausentes"]))
+    if r["estourou"]:
+        return {"erro": f"tempo esgotado após {int(limite)} s", "s": duracao}
+    saida = r["resultado"]
+    if saida is None:
+        return {"erro": f"saída inesperada (código {r['codigo']}): {r['resto'][-400:]}", "s": duracao}
     return {
         "erro": saida.get("result") if saida.get("is_error") else None,
         "resultado": (saida.get("result") or "")[:500],
@@ -329,7 +343,69 @@ def acordar_claude(contexto: str | None = None, modelo: str | None = None,
         "s": duracao,
         "custo_usd": saida.get("total_cost_usd"),
         "negados": [d.get("tool_name") for d in saida.get("permission_denials", [])],
+        "ausentes": r["ausentes"],
     }
+
+
+def servidores_exigidos(permitidas: list[str]) -> list[str]:
+    """Servidores MCP liberados, pelo nome: `mcp__claude_ai_Gmail__get_thread` -> `claude_ai_Gmail`."""
+    nomes: list[str] = []
+    for regra in permitidas:
+        if regra.startswith("mcp__"):
+            nome = regra[len("mcp__"):].split("__", 1)[0]
+            if nome and nome not in nomes:
+                nomes.append(nome)
+    return nomes
+
+
+def servidores_ausentes(init: dict, exigidos: list[str]) -> list[str]:
+    """Quais servidores exigidos não trouxeram nenhuma ferramenta para a sessão."""
+    ferramentas = init.get("tools") or []
+    return [n for n in exigidos if not any(t.startswith(f"mcp__{n}__") for t in ferramentas)]
+
+
+def rodar_claude(cmd: list[str], limite_s: float, exigidos: list[str], abortar_se_faltar: bool) -> dict:
+    """Roda o `claude -p` lendo o stream. O evento `init` sai antes do primeiro turno do
+    modelo, com a lista de ferramentas: se faltar um servidor, dá para matar o processo
+    ali, sem custo, e tentar de novo."""
+    import threading
+
+    proc = subprocess.Popen(
+        cmd, cwd=AQUI, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace", env=ambiente_limpo(),
+    )
+    estado = {"estourou": False}
+
+    def estourar():
+        estado["estourou"] = True
+        proc.kill()
+
+    relogio = threading.Timer(limite_s, estourar)
+    relogio.daemon = True
+    relogio.start()
+    resultado, ausentes, resto = None, [], ""
+    try:
+        for linha in proc.stdout:
+            try:
+                evento = json.loads(linha)
+            except ValueError:
+                resto = (resto + linha)[-2000:]
+                continue
+            if not isinstance(evento, dict):
+                continue
+            if evento.get("type") == "system" and evento.get("subtype") == "init":
+                ausentes = servidores_ausentes(evento, exigidos)
+                if ausentes and abortar_se_faltar:
+                    proc.kill()
+                    break
+            elif evento.get("type") == "result":
+                resultado = evento
+        proc.wait()
+    finally:
+        relogio.cancel()
+        proc.stdout.close()
+    return {"resultado": resultado, "ausentes": ausentes, "estourou": estado["estourou"],
+            "codigo": proc.returncode, "resto": resto}
 
 
 # ------------------------------------------------------------------ laço
@@ -401,6 +477,8 @@ def main() -> int:
             log.error("acionamento falhou (modelo %s, %ss): %s", modelo, res.get("s"), res["erro"])
         else:
             negados = f", negados: {res['negados']}" if res.get("negados") else ""
+            if res.get("ausentes"):
+                negados += f", sem servidores: {res['ausentes']}"
             log.info(
                 "acionamento ok (modelo %s): %s turnos, %ss, US$ %s%s | %s",
                 modelo, res.get("turnos"), res.get("s"), res.get("custo_usd"), negados,
