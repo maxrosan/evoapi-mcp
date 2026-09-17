@@ -74,11 +74,14 @@ LABEL version="1.2.0"
 
 # Instalar apenas runtime dependencies.
 # libcairo2: cairosvg a abre por dlopen; sem ela o send_render não rasteriza.
+# fonts-dejavu-core e fonts-noto-color-emoji: acentos e emoji no PDF do build_pdf.
 RUN apt-get update && apt-get install -y \
     curl \
     libcairo2 \
     tesseract-ocr \
     tesseract-ocr-por \
+    fonts-dejavu-core \
+    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # Criar usuário não-root
