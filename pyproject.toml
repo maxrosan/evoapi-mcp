@@ -19,6 +19,8 @@ dependencies = [
     "fastembed>=0.5.0",
     # OCR do índice de documentos; exige o binário tesseract (apt) no servidor.
     "pytesseract>=0.3.10",
+    # Monta o PDF revisado de open_pdf/build_pdf (Python puro). Ver pdfdoc.py.
+    "fpdf2>=2.8.0",
 ]
 
 [project.optional-dependencies]

@@ -55,6 +55,7 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ `send_render` desenha a imagem a partir do SVG do modelo: o desenho viaja como texto
 - ✅ `send_url` envia arquivo que já está na web pelo link (o servidor baixa, o chat só vê a URL)
 - ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
+- ✅ `open_pdf` + `build_pdf` revisam um PDF: desmonta em texto e imagens com id, remonta com as fotos originais
 - ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
 - ✅ Tools de base64 escondidas por padrão: o caminho caro não fica à mão sem querer
 - ✅ A regra de "qual tool usar" viaja no próprio servidor (instructions do MCP)
@@ -172,6 +173,25 @@ está na web, `send_image` com a URL (aí quem baixa é a Evolution, e o custo �
 
 Requer o extra `[svg]` (cairosvg) e, no sistema, a `libcairo2` — já incluída na imagem
 Docker. Sem ela, a tool devolve um erro dizendo o que instalar em vez de quebrar.
+
+### PDF revisado ("ajusta esse relatório com base nos comentários")
+
+PDF montado não reflui: trocar um parágrafo por um maior invade o de baixo. Por isso a
+revisão desmonta e remonta, sem pixel na conversa:
+
+```
+open_pdf(message_id="...")                 # texto em blocos por página + imagens img1, img2...
+build_pdf(document={"blocos": [...]}, pdf_id="a4598cfdeccd",
+          number="120363...@g.us", file_name="Relatório - revisado.pdf")
+```
+
+`open_pdf` grava as imagens em `<EVOLUTION_MEDIA_DIR>/pdf/<pdf_id>/` e devolve só os ids;
+cabeçalho, rodapé e logotipo que se repetem em quase toda página vêm uma vez só. Um
+relatório de 9 páginas e 14 fotos chega em ~16 mil caracteres. `build_pdf` desenha com
+`fpdf2` (blocos `titulo`, `paragrafo`, `lista`, `imagem`, `galeria`, `tabela`,
+`espaco`, `linha`, `quebra_de_pagina`, com cabeçalho e rodapé numerado) e, com `number`,
+envia. Fontes: DejaVu e Noto Color Emoji na imagem Docker (`fonts-dejavu-core`,
+`fonts-noto-color-emoji`); sem TTF nenhuma, cai na Helvetica e avisa o que ficou de fora.
 
 ### Imagem que já existe em algum lugar
 

@@ -60,6 +60,24 @@ nada para obter o que já está escrito neste prompt.
      resposta sozinho.
    - **Agendar**: `schedule_message(number, text, when, voice)` com a data e hora do
      topo; `list_scheduled` e `cancel_scheduled` para consultar e cancelar.
+   - **Revisar um PDF** ("ajusta esse relatório com base nos comentários", "corrige esse
+     PDF"): não dá para editar o PDF por cima; desmonte e remonte.
+     1. `open_pdf(message_id=<citada.id ou id do arquivo>)`: texto em blocos por página e
+        imagens com id (`img3`). As fotos ficam no servidor; não as abra.
+     2. Comentários são as mensagens do chat sobre o PDF: as que citam o PDF e as enviadas
+        depois dele até o pedido (`mensagens_recentes`; se o PDF for mais antigo,
+        `get_chat_messages`). Comentário em áudio: `transcribe_audio`.
+     3. Faça o que os comentários pedem e corrija erro claro (letra de outro alfabeto no
+        meio da frase, nome trocado, palavra repetida). Não invente conteúdo nem legenda:
+        o que ninguém comentou fica como estava.
+     4. `build_pdf(document, pdf_id, number=chat, file_name="<nome original> - revisado.pdf")`
+        com as seções na mesma ordem e todas as fotos pelo id (portfólio em `galeria`),
+        o logotipo `repetida` e o texto de `repetido_em_todas` no `cabecalho`/`rodape`,
+        e tabela como bloco `tabela`. Texto longo vai inteiro, não resuma.
+     5. Depois do PDF, uma mensagem com 3 a 6 linhas "•" dizendo o que mudou. Comentário
+        que não deu para atender: diga qual e por quê.
+     Use `view_media` só se precisar ver uma foto ou a diagramação de uma página.
+   - **PDF novo** ("gera um PDF com..."): `build_pdf` com os blocos e `number` do chat.
    - Card, tarefa ou registro criado a partir de imagem: descreva nele o que a imagem
      mostra, porque quem abrir não vê o WhatsApp.
 3. Responda **no mesmo chat** de cada pendência e depois chame `mark_triggers_handled`

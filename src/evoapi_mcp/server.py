@@ -25,6 +25,7 @@ from evoapi_mcp.history import HistoryError
 from evoapi_mcp.indexer import IndexerError
 from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
+from evoapi_mcp.pdfdoc import PdfDocError, extract_pdf, build_pdf as pdfdoc_build
 from evoapi_mcp.storage import sweep, usage
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
@@ -57,6 +58,8 @@ você. Escolha o caminho pela origem do arquivo:
 - Arquivo já no disco do servidor, como o `path` que download_media devolveu → send_file.
 - Arquivo arquivado no Drive por este servidor → send_drive_file, por id, pelo link
   ou por pasta + nome.
+- PDF que VOCÊ vai montar, ou revisar a partir de outro → open_pdf desmonta (texto
+  e imagens com id, sem pixel no chat) e build_pdf remonta e envia.
 - Texto → send_text_message.
 
 Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
@@ -1010,6 +1013,108 @@ def send_drive_file(
     if isinstance(result, dict) and result.get("_file"):
         out["file"] = result["_file"]
     return _out(out)
+
+
+@mcp.tool()
+def open_pdf(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    password: str | None = None,
+    first_page: int = 1,
+    last_page: int | None = None,
+    max_chars: int = 30000,
+) -> str:
+    """Desmonta um PDF para você REVISAR e remontar com build_pdf: texto em blocos e imagens com id.
+
+    Use quando Max pedir para ajustar, corrigir ou refazer um PDF ("ajusta esse
+    relatório com base nos comentários"). O texto vem por página, em blocos na ordem de
+    leitura; cada imagem fica gravada no servidor e aparece como {imagem: "img3", x,
+    largura} (x e largura em % da página), sem pixel na conversa. Cabeçalho e rodapé que
+    se repetem saem uma vez em `repetido_em_todas`, e o logotipo repetido vem com
+    `repetida: true`. `tam` marca texto de tamanho diferente do corpo (títulos).
+
+    Para só LER um PDF, download_media(extract_text=True) é mais barato. Para ver uma
+    foto ou a diagramação de uma página, view_media.
+
+    Args:
+        message_id: id da mensagem com o PDF (`citada.id` ou um de `anexos_recentes`)
+        file_path: PDF que já está no servidor
+        password: senha, se o PDF for protegido
+        first_page, last_page: trecho a abrir (padrão: tudo)
+        max_chars: limite de texto; acima dele volta `cortado_na_pagina` para continuar
+    Returns: {pdf_id, arquivo, paginas, imagens:[{id, px, paginas, repetida?}],
+              repetido_em_todas?, conteudo:[{pagina, blocos}], cortado_na_pagina?}
+    """
+    try:
+        if message_id:
+            baixado = client.download_media(message_id, password=password)
+            caminho = baixado["path"]
+            mime = (baixado.get("mime") or "").lower()
+            if "pdf" not in mime and not str(caminho).lower().endswith(".pdf"):
+                return _out({"error": f"a mensagem {message_id} não é PDF (mime: {mime or '?'})"})
+        elif file_path:
+            caminho = file_path
+        else:
+            return _out({"error": "informe message_id ou file_path"})
+        return _out(extract_pdf(
+            caminho, client.media_dir, password=password,
+            first_page=first_page, last_page=last_page, max_chars=max_chars,
+        ))
+    except (PdfDocError, ValueError) as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
+def build_pdf(
+    document: dict | str,
+    file_name: str = "documento.pdf",
+    pdf_id: str | None = None,
+    number: str | None = None,
+    caption: str | None = None,
+) -> str:
+    """Monta um PDF a partir de blocos e, com `number`, já envia pelo WhatsApp.
+
+    Serve para o PDF revisado depois de open_pdf (as imagens voltam pelo id, com a
+    qualidade original) e para documento novo que você mesmo escreve.
+
+    `document`: {"titulo", "blocos": [...], "cabecalho"?, "rodape"?, "cor_destaque"?,
+    "fonte_pt"?, "margem_mm"?, "orientacao"?: "retrato"|"paisagem", "tamanho"?: "A4"}
+    - cabecalho: texto, ou {"texto", "imagem": "img2", "primeira_pagina": false}
+    - rodape: texto; {pagina} e {total} viram números
+    Blocos (campo "tipo"):
+    - {"tipo":"titulo","texto","nivel":1|2|3,"alinhar"?,"tam"?,"cor"?}
+    - {"tipo":"paragrafo","texto","alinhar"?: "esquerda"|"centro"|"direita"|"justificado",
+       "negrito"?,"italico"?,"tam"?} — aceita **negrito** e __itálico__; \n quebra linha
+    - {"tipo":"lista","itens":[...],"numerada"?}
+    - {"tipo":"imagem","imagem":"img3","largura_mm"?,"legenda"?,"alinhar"?}
+    - {"tipo":"galeria","imagens":[{"imagem":"img5","legenda"}],"colunas"?: 3}
+    - {"tipo":"tabela","cabecalho":[...],"linhas":[[...]],"larguras"?: [70,30]}
+    - {"tipo":"espaco","mm"}, {"tipo":"linha"}, {"tipo":"quebra_de_pagina"}
+    "imagem" é um id de open_pdf (passe o pdf_id) ou o `path` de um arquivo baixado no
+    servidor (download_media).
+
+    Args:
+        document: o documento, como objeto (ou texto JSON)
+        file_name: nome do arquivo (ex: "Relatório Caio - revisado.pdf")
+        pdf_id: o pdf_id de open_pdf, quando usar imagens dele
+        number: destino no WhatsApp; sem ele só monta e devolve o caminho
+        caption: legenda da mensagem
+    Returns: {path, file, size, paginas, avisos?, caracteres_removidos?, enviado?}
+    """
+    try:
+        montado = pdfdoc_build(document, client.media_dir, file_name=file_name, pdf_id=pdf_id)
+    except PdfDocError as e:
+        return _out({"error": str(e)})
+    if not number:
+        return _out(montado)
+    try:
+        result = client.send_file(
+            number=number, file_path=montado["path"], caption=caption,
+            media_type="document", file_name=montado["file"],
+        )
+    except ValueError as e:
+        return _out({**montado, "error": f"montado, mas não enviado: {e}"})
+    return _out({**montado, "enviado": _enviado(result)})
 
 
 @mcp.tool()
