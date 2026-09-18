@@ -27,6 +27,7 @@ from evoapi_mcp.drive import DriveError
 from evoapi_mcp.rendering import RenderError
 from evoapi_mcp.pdfdoc import PdfDocError, extract_pdf, build_pdf as pdfdoc_build
 from evoapi_mcp.video import VideoError, extract_frames, is_video
+from evoapi_mcp.qrcodes import QrError, pix_payload, render_qr
 from evoapi_mcp.storage import sweep, usage
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
@@ -61,6 +62,9 @@ você. Escolha o caminho pela origem do arquivo:
   ou por pasta + nome.
 - PDF que VOCÊ vai montar, ou revisar a partir de outro → open_pdf desmonta (texto
   e imagens com id, sem pixel no chat) e build_pdf remonta e envia.
+- QR Code (link, texto ou Pix) → send_qrcode: o código do Pix é montado pelo padrão
+  do Banco Central, com o dígito verificador calculado. Nunca desenhe QR em SVG nem
+  use site de terceiros: não lê, e código de Pix errado paga a quem não devia.
 - Texto → send_text_message.
 
 Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
@@ -1170,6 +1174,69 @@ def view_media(
         "first_page": page,
     })
     return [resumo] + [Image(data=img, format="jpeg") for img in resultado["images"]]
+
+
+@mcp.tool()
+def send_qrcode(
+    number: str | None = None,
+    text: str | None = None,
+    pix_key: str | None = None,
+    amount: str | float | None = None,
+    receiver: str | None = None,
+    city: str | None = None,
+    message: str | None = None,
+    caption: str | None = None,
+    file_name: str = "qrcode.png",
+) -> str:
+    """Gera um QR Code (link, texto ou Pix) e, com `number`, envia pelo WhatsApp.
+
+    Para Pix, informe `pix_key` e, quase sempre, `amount`: o servidor monta o código
+    "copia e cola" no padrão do Banco Central, com o dígito verificador calculado, e
+    desenha o QR. Não use send_render nem sites de terceiros para isso — QR desenhado
+    à mão não lê, e um código de Pix errado manda o dinheiro para outro lugar.
+
+    O servidor não paga nem consulta banco nenhum: ele só escreve o pedido de pagamento.
+    Confira a chave antes de mandar, e mande a legenda dizendo de quem é a chave.
+
+    Args:
+        number: destino no WhatsApp; sem ele, só gera e devolve o caminho
+        text: conteúdo do QR quando NÃO for Pix (link, texto, contato)
+        pix_key: chave Pix (CPF, CNPJ, telefone, e-mail ou chave aleatória)
+        amount: valor em reais ("37" ou "37,00"); sem valor, quem paga digita
+        receiver: nome de quem recebe (vai no QR, sem acento, até 25 caracteres)
+        city: cidade de quem recebe (até 15 caracteres)
+        message: recado curto dentro do código (opcional)
+        caption: legenda da mensagem (padrão: o "copia e cola" do Pix)
+        file_name: nome do arquivo enviado
+    Returns: {path, file, size, payload?, chave?, valor?, enviado?}
+    """
+    if bool(text) == bool(pix_key):
+        return _out({"error": "informe text (QR comum) OU pix_key (QR de Pix)"})
+    try:
+        if pix_key:
+            pix = pix_payload(pix_key, valor=amount, nome=receiver, cidade=city, mensagem=message)
+            conteudo = pix["payload"]
+        else:
+            pix, conteudo = {}, text
+        imagem = render_qr(conteudo, client.media_dir, file_name=file_name)
+    except QrError as e:
+        return _out({"error": str(e)})
+
+    saida = {**imagem, **pix}
+    if not number:
+        return _out(saida)
+    legenda = caption
+    if legenda is None and pix:
+        valor = f" de R$ {pix['valor'].replace('.', ',')}" if pix.get("valor") else ""
+        legenda = f"Pix{valor} para {pix['nome']} (chave {pix['chave']})\n\n{pix['payload']}"
+    try:
+        result = client.send_file(
+            number=number, file_path=imagem["path"], caption=legenda,
+            media_type="image", file_name=imagem["file"],
+        )
+    except ValueError as e:
+        return _out({**saida, "error": f"gerado, mas não enviado: {e}"})
+    return _out({**saida, "enviado": _enviado(result, texto=legenda)})
 
 
 @mcp.tool()

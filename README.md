@@ -57,6 +57,7 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ `send_drive_file` reenvia pelo WhatsApp o que já foi arquivado no Drive, por id ou link
 - ✅ `open_pdf` + `build_pdf` revisam um PDF: desmonta em texto e imagens com id, remonta com as fotos originais
 - ✅ `view_video` / `video_frames` veem o vídeo por poucos quadros escolhidos, e `transcribe_audio` lê a fala de dentro do mp4
+- ✅ `send_qrcode` gera QR Code, inclusive o do Pix (BR Code com CRC calculado no servidor)
 - ✅ Faxina automática do `media_dir` por idade, para o disco do container não encher
 - ✅ Tools de base64 escondidas por padrão: o caminho caro não fica à mão sem querer
 - ✅ A regra de "qual tool usar" viaja no próprio servidor (instructions do MCP)
@@ -174,6 +175,22 @@ está na web, `send_image` com a URL (aí quem baixa é a Evolution, e o custo �
 
 Requer o extra `[svg]` (cairosvg) e, no sistema, a `libcairo2` — já incluída na imagem
 Docker. Sem ela, a tool devolve um erro dizendo o que instalar em vez de quebrar.
+
+### QR Code e Pix
+
+```
+send_qrcode(number="55849...", pix_key="84996246771", amount="37,00",
+            receiver="Ana Keilla", city="Currais Novos")
+send_qrcode(number="55849...", text="https://exemplo.com")
+```
+
+O Pix estático é só texto: o servidor monta o BR Code do Banco Central (campos
+`ID+tamanho+valor`) e calcula o CRC16 do fim, desenha o QR com `segno` e manda a imagem
+com o "copia e cola" na legenda. Nada vai à internet e nenhum banco é consultado — o
+servidor escreve o pedido de pagamento, não paga. A chave aceita CPF, CNPJ, telefone,
+e-mail ou chave aleatória; 11 dígitos são desempatados pelo dígito verificador do CPF
+(84996246771 vira telefone, 123.456.789-09 vira CPF), e escrever `+55DDDNÚMERO` tira a
+dúvida. Valor, nome e cidade seguem os limites do padrão (nome 25, cidade 15, sem acento).
 
 ### Vídeo: a fala e a imagem
 

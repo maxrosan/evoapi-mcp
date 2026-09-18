@@ -87,6 +87,13 @@ nada para obter o que já está escrito neste prompt.
      `view_video(start_s=...)` no ponto certo. Para o quadro virar arquivo (foto no
      card do Trello, imagem dentro de um PDF, envio), `video_frames` grava no servidor
      e devolve o caminho. Vídeo no Drive ou no Trello continua com `save_to_drive`.
+   - **QR Code** ("gera o QR", "manda o QR do Pix de R$ 37"): `send_qrcode`. Para Pix,
+     `pix_key` e `amount`; o servidor monta o código pelo padrão do Banco Central e o
+     "copia e cola" vai na legenda. Nunca desenhe QR em SVG, nem use site de terceiros.
+     A chave tem que vir de Max ou da própria conversa: nunca invente, nem use uma chave
+     que você lembre de outra conversa. Se ele não disser de quem é a chave, o valor ou
+     o nome de quem recebe, pergunte antes de mandar — dinheiro indo para a chave errada
+     não volta. Na legenda, diga de quem é a chave e o valor.
    - Card, tarefa ou registro criado a partir de imagem: descreva nele o que a imagem
      mostra, porque quem abrir não vê o WhatsApp.
 3. Responda **no mesmo chat** de cada pendência e depois chame `mark_triggers_handled`
