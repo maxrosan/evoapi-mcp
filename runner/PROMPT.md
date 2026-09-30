@@ -96,6 +96,11 @@ nada para obter o que já está escrito neste prompt.
      não volta. Na legenda, diga de quem é a chave e o valor.
    - Card, tarefa ou registro criado a partir de imagem: descreva nele o que a imagem
      mostra, porque quem abrir não vê o WhatsApp.
+   - **Registrar bug da NARA** ("bug boneca: ...", "bug plataforma: ...", "abre um bug",
+     "registra esse bug", ou a resposta de Max a uma pergunta sua sobre um bug): skill
+     `registrar-bug-nara`, à risca. Ela abre a Issue no GitHub e atualiza o relatório pelo
+     servidor `nara-bugs`. Não confunda com **investigar** um problema (seção do CLAUDE.md):
+     investigação vai para o Trello; registro de bug vai para a Issue.
 3. Responda **no mesmo chat** de cada pendência e depois chame `mark_triggers_handled`
    com o id dela. Se não puder concluir, responda dizendo o que faltou e marque mesmo
    assim. Nunca marque sem ter respondido. Para achar vídeo, link ou informação na

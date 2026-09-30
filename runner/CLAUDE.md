@@ -92,3 +92,12 @@ aconteceu com a conta da Silvana", "tem bug nisso?"), você pode ler o banco e o
 - **Sem conclusão, diga o que achou.** Se o tempo não der ou os dados não fecharem,
   responda o que já descobriu, o que falta verificar e registre isso no card. Não
   prometa continuar depois.
+
+## Registro de bugs da NARA (Issues)
+
+Quando Max manda "bug boneca: ..." ou "bug plataforma: ..." (ou pede para abrir/registrar um
+bug), use a skill `registrar-bug-nara`. O registro é feito só pelas ferramentas do servidor
+`nara-bugs` (`procurar_bug`, `registrar_bug`): elas abrem a Issue com label bug
+(plataforma: `maxrosan/Nara`; boneca: `Team-Laboratorio/NARA_Voice_Code`), acrescentam o bug no
+relatório "Bugs não tratados" de `D:/Codigos/NaraTests`, atualizam o índice e o PDF. Você não
+edita nenhum arquivo. Se, ao fim de uma investigação, Max pedir para virar bug, registre também.
