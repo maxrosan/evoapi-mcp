@@ -269,6 +269,7 @@ do MCP (`server.py`), ditas uma vez:
 | já está no disco do servidor | `send_file` |
 | foi arquivado no Drive por aqui | `send_drive_file` |
 | é texto | `send_text_message` |
+| não é para a conversa: Max quer **baixar** | `temp_link` |
 
 As três tools de base64 (`send_image_base64`, `send_document_base64`,
 `get_media_base64`) ficam **escondidas por padrão**. Elas existem por paridade com o
@@ -296,6 +297,37 @@ conversa e sem depender de o arquivo ainda estar no disco daqui. Só alcança o 
 **este servidor** arquivou: o escopo `drive.file` dá acesso ao que o próprio app criou,
 e é justamente por isso que não é preciso escopo restrito, verificação do Google nem
 tornar nada público.
+
+### Link temporário de download
+
+As outras tools levam o arquivo para algum lugar: a conversa, o Drive. `temp_link`
+faz o caminho de volta — o arquivo fica no servidor e vira um **endereço que abre no
+navegador**. É a resposta para "me passa aquele PDF que chegou": `download_media` já
+trazia o anexo para o disco, mas o `path` que ele devolve só existe dentro do container.
+
+```
+temp_link(message_id="3EB0...")              # baixa o anexo e devolve o link, de uma vez
+temp_link(file_path="/data/media/nota.pdf", minutes=15)
+→ {"url":"https://.../dl/<token>/nota.pdf","expires_at":"2026-10-23 15:40","expires_in_min":60,...}
+```
+
+O link **não** é um caminho público: é o caminho do arquivo assinado com um segredo do
+servidor (HMAC-SHA256), junto com a hora em que deixa de valer. Quem recebe não troca o
+caminho por outro — a assinatura não fecha — nem estica o prazo, que faz parte do que foi
+assinado; e o servidor não guarda lista de links emitidos, porque a URL carrega o que ele
+precisa conferir. Fora da pasta de mídias nada sai, nem com o segredo em mãos.
+
+A rota `/dl/<token>/<nome>` fica **fora** da autenticação Bearer, de propósito: quem abre é
+um navegador, que não manda header. Link vencido responde 410 (e não 404): "esse link venceu"
+e "esse link nunca existiu" são coisas diferentes para quem está do outro lado. Prazo curto
+por padrão — uma hora —, porque o link anda por WhatsApp, e-mail e histórico de navegador,
+lugares de onde não volta.
+
+```bash
+EVOLUTION_PUBLIC_URL=https://meuservidor.exemplo   # sem isto a tool não emite link
+EVOLUTION_LINK_SECRET=...                          # padrão: o próprio MCP_AUTH_TOKEN
+EVOLUTION_LINK_TTL_MINUTES=60                      # teto de 1440
+```
 
 ### Faxina da pasta de mídias
 

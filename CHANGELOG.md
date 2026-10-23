@@ -9,6 +9,27 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+### 🔗 Link temporário: o arquivo do servidor vira endereço
+
+Faltava o caminho de volta para o próprio Max. As tools levam arquivo para a conversa ou
+para o Drive; quando ele queria só **baixar** o que chegou, o `path` que `download_media`
+devolve não servia — só existe dentro do container.
+
+- **`temp_link(message_id?, file_path?, minutes=60, filename?)`**: devolve um endereço que
+  abre em qualquer navegador e vence sozinho. Com `message_id`, baixa o anexo do WhatsApp e
+  emite o link num passo só. Volta `{url, expires_at, expires_in_min, file, size, mime}`
+- **`links.py`**: o link não é um caminho público, é o caminho do arquivo **assinado**
+  (HMAC-SHA256) junto com a hora em que deixa de valer. Não dá para trocar o caminho nem
+  esticar o prazo, e o servidor não guarda lista de links emitidos — a URL carrega o que ele
+  confere. Nada sai da pasta de mídias, nem com o segredo em mãos: o `..` é recusado na
+  emissão **e** na entrega
+- **Rota `/dl/<token>/<nome>`** no `mcp_http`, **fora** da autenticação Bearer de propósito:
+  quem abre é um navegador, que não manda header. Entrega em pedaços de 256 KB, responde a
+  `HEAD`, mostra na aba o que o navegador sabe mostrar (imagem, vídeo, áudio, PDF) e baixa o
+  resto. Link vencido responde **410**, não 404
+- Configuração: `EVOLUTION_PUBLIC_URL` (sem ela a tool não emite link), `EVOLUTION_LINK_SECRET`
+  (padrão: o próprio `MCP_AUTH_TOKEN`) e `EVOLUTION_LINK_TTL_MINUTES` (padrão 60, teto 1440)
+
 ### 🖼️ Imagem saindo daqui sem base64 no chat
 
 Faltava o caminho de volta: `download_media`, `view_media` e `archive_to_drive` já evitavam

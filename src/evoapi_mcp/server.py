@@ -6,6 +6,7 @@ Isso reduz em ~10x os tokens consumidos pelo LLM em cada chamada. Passe
 `full=True` nas tools de leitura quando precisar do objeto bruto.
 """
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from evoapi_mcp.pdfdoc import PdfDocError, extract_pdf, build_pdf as pdfdoc_buil
 from evoapi_mcp.video import VideoError, extract_frames, is_video
 from evoapi_mcp.qrcodes import QrError, pix_payload, render_qr
 from evoapi_mcp.storage import sweep, usage
+from evoapi_mcp import links
 from evoapi_mcp.weblink import WebLinkError
 from evoapi_mcp.transcription import TranscriptionError
 from evoapi_mcp.formatters import set_display_timezone
@@ -38,6 +40,7 @@ from evoapi_mcp.formatters import (
     compact_contact,
     compact_send_result,
     dumps,
+    fmt_ts,
 )
 
 # A regra de escolha mora aqui, e não espalhada pelas descrições das tools.
@@ -66,6 +69,11 @@ você. Escolha o caminho pela origem do arquivo:
   do Banco Central, com o dígito verificador calculado. Nunca desenhe QR em SVG nem
   use site de terceiros: não lê, e código de Pix errado paga a quem não devia.
 - Texto → send_text_message.
+
+Quando o arquivo não é para a CONVERSA e sim para Max baixar ("me passa o arquivo",
+"quero baixar", "manda o link") → temp_link: o servidor guarda o arquivo e devolve um
+endereço assinado que vence em uma hora. Aceita o id da mensagem direto, então pegar
+um anexo do WhatsApp e virar link é uma chamada só.
 
 Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
 documento tem camada de texto, view_media quando não tem (comprovante fotografado,
@@ -887,6 +895,57 @@ def download_media(
         message_id=message_id, save_dir=save_dir, filename=filename,
         extract_text=extract_text, max_chars=max_chars, password=password,
     ))
+
+
+@mcp.tool()
+def temp_link(
+    message_id: str | None = None,
+    file_path: str | None = None,
+    minutes: int = 0,
+    filename: str | None = None,
+) -> str:
+    """Devolve um link temporário para Max baixar um arquivo pelo navegador.
+
+    É o caminho de volta das outras tools: `download_media` traz o anexo do WhatsApp
+    para o disco do servidor, mas aquele `path` só existe dentro do container. Aqui o
+    arquivo vira um endereço que abre em qualquer navegador e vence sozinho.
+
+    Use quando o pedido for "me passa o arquivo", "quero baixar", "manda o link".
+    Para fazer o arquivo chegar na CONVERSA do WhatsApp, é `send_file`; para guardar,
+    `archive_to_drive`.
+
+    Com `message_id`, o servidor baixa o anexo antes (o mesmo trabalho de
+    `download_media`) e emite o link num passo só.
+
+    Args:
+        message_id: id da mensagem cujo anexo deve virar link (informe este OU file_path)
+        file_path: arquivo que já está no disco do servidor
+        minutes: validade em minutos (padrão: EVOLUTION_LINK_TTL_MINUTES, 60; teto 1440)
+        filename: nome do arquivo, quando vem por message_id
+    Returns: {url, expires_at, expires_in_min, file, size, mime}
+    """
+    if bool(message_id) == bool(file_path):
+        raise ValueError("Informe message_id OU file_path (exatamente um dos dois)")
+
+    caminho = file_path
+    if message_id:
+        baixado = client.download_media(message_id=message_id, filename=filename)
+        caminho = baixado.get("path")
+        if not caminho:
+            raise ValueError(f"A mensagem {message_id} não tem anexo para baixar.")
+
+    try:
+        resultado = links.build(
+            file_path=caminho,
+            media_dir=config.media_dir,
+            public_url=config.public_url,
+            secret=links.secret_from(config, os.environ),
+            minutes=minutes or config.link_ttl_minutes,
+        )
+    except links.LinkError as e:
+        return _out({"error": str(e)})
+    resultado["expires_at"] = fmt_ts(resultado["expires_at"])
+    return _out(resultado)
 
 
 @mcp.tool()
