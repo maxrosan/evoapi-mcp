@@ -11,6 +11,12 @@ Variáveis de ambiente:
     EVOLUTION_WEBHOOK_SECRET  opcional; ativa o receptor de eventos da Evolution
                               em /webhook/<segredo>, e a leitura em
                               /webhook/<segredo>/log. Sem ela as duas rotas não existem.
+    EVOLUTION_PUBLIC_URL      endereço externo deste servidor. Com ela, a tool `temp_link`
+                              emite links de download servidos em /dl/<token>/<nome>, fora
+                              da autenticação Bearer (a assinatura da URL é a chave).
+    EVOLUTION_LINK_SECRET     segredo que assina esses links (padrão: MCP_AUTH_TOKEN).
+    EVOLUTION_LINK_TTL_MINUTES
+                              validade padrão do link (padrão 60).
     EVOLUTION_BOT_ENABLED     "1" liga o bot "IA:". **Desligado por padrão**: sem isto
                               o receptor apenas observa, sem responder a ninguém.
     ANTHROPIC_API_KEY         necessária quando o bot está ligado.
@@ -36,6 +42,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import quote
 
 src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
@@ -219,6 +226,22 @@ def build_app(token: str):
         except Exception as e:  # nunca deixar a thread morrer calada
             print(f"[ERROR] Bot: falha ao processar: {e}", file=sys.stderr)
 
+    # Link temporário de download: a rota /dl fica FORA da autenticação Bearer de
+    # propósito — quem abre é um navegador, que não manda header nenhum. O que
+    # protege o arquivo é a assinatura da própria URL, com o prazo dentro dela.
+    from evoapi_mcp import links
+
+    link_secret = links.secret_from(evolution_config, os.environ)
+    media_dir = Path(evolution_config.media_dir)
+    if evolution_config.public_url and link_secret:
+        print(
+            f"Links temporários em {evolution_config.public_url.rstrip('/')}{links.PREFIXO}/"
+            f" (padrão {evolution_config.link_ttl_minutes} min)",
+            file=sys.stderr,
+        )
+    else:
+        print("Links temporários desligados: falta EVOLUTION_PUBLIC_URL.", file=sys.stderr)
+
     # Atrás de proxy (Easypanel/Traefik) o Host não é localhost: desliga a proteção de DNS rebinding
     mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     inner = mcp.streamable_http_app()
@@ -230,6 +253,32 @@ def build_app(token: str):
             "headers": [(b"content-type", content_type), (b"content-length", str(len(body)).encode())],
         })
         await send({"type": "http.response.body", "body": body})
+
+    async def respond_file(send, alvo: dict, head: bool) -> None:
+        """Entrega o arquivo em pedaços, para um PDF grande não virar um bloco na memória."""
+        disposicao = "inline" if alvo["inline"] else "attachment"
+        nome = quote(alvo["file"])
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", alvo["mime"].encode()),
+                (b"content-length", str(alvo["size"]).encode()),
+                (b"content-disposition", f"{disposicao}; filename*=UTF-8''{nome}".encode()),
+                # O link vence sozinho; o cache não pode sobreviver a ele.
+                (b"cache-control", b"private, no-store"),
+            ],
+        })
+        if head:
+            await send({"type": "http.response.body", "body": b""})
+            return
+        with open(alvo["path"], "rb") as arquivo:
+            while True:
+                pedaco = arquivo.read(256 * 1024)
+                if not pedaco:
+                    break
+                await send({"type": "http.response.body", "body": pedaco, "more_body": True})
+        await send({"type": "http.response.body", "body": b""})
 
     async def read_body(receive) -> bytes:
         corpo = b""
@@ -247,6 +296,22 @@ def build_app(token: str):
             # consultam para saber se o container subiu. Não expõe nada.
             if caminho == "/health":
                 await respond(send, 200, b'{"status":"healthy"}', b"application/json")
+                return
+
+            if caminho == links.PREFIXO or caminho.startswith(f"{links.PREFIXO}/"):
+                if scope.get("method") not in ("GET", "HEAD"):
+                    await respond(send, 405, b"Method Not Allowed", b"text/plain; charset=utf-8")
+                    return
+                token = caminho[len(links.PREFIXO) + 1:].split("/", 1)[0]
+                try:
+                    alvo = links.resolve(token, media_dir, link_secret)
+                except links.LinkExpired as e:
+                    await respond(send, 410, str(e).encode(), b"text/plain; charset=utf-8")
+                    return
+                except links.LinkError as e:
+                    await respond(send, 404, str(e).encode(), b"text/plain; charset=utf-8")
+                    return
+                await respond_file(send, alvo, head=scope.get("method") == "HEAD")
                 return
 
             if webhook_secret and caminho.startswith(f"/webhook/{webhook_secret}"):

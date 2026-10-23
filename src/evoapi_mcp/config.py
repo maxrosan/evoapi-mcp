@@ -17,6 +17,11 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_MEDIA_TTL_DAYS: (Opcional) Idade máxima dos arquivos dessa pasta, em dias
     - EVOLUTION_BASE64_TOOLS: (Opcional) 1 reexpõe as tools de base64, desligadas por padrão
       (padrão: ~/.evoapi-mcp/media)
+    - EVOLUTION_PUBLIC_URL: (Opcional) Endereço externo deste servidor, ex:
+      https://meuservidor.exemplo. Sem ele a tool temp_link não tem como montar o link
+    - EVOLUTION_LINK_SECRET: (Opcional) Segredo que assina o link temporário
+      (vazio: usa MCP_AUTH_TOKEN)
+    - EVOLUTION_LINK_TTL_MINUTES: (Opcional) Validade padrão do link (padrão: 60)
     - EVOLUTION_DEFAULT_LIMIT: (Opcional) Quantidade padrão de itens em listagens (padrão: 20)
     - EVOLUTION_MAX_TEXT_CHARS: (Opcional) Corte de texto por mensagem no modo compacto (padrão: 500)
 
@@ -69,6 +74,20 @@ class EvolutionConfig(BaseSettings):
         description="Idade máxima dos arquivos em media_dir, em dias (0 desliga a faxina)",
         ge=0,
         le=3650
+    )
+    public_url: str = Field(
+        default="",
+        description="Endereço externo deste servidor, usado nos links temporários de download"
+    )
+    link_secret: str = Field(
+        default="",
+        description="Segredo que assina os links temporários (vazio: usa MCP_AUTH_TOKEN)"
+    )
+    link_ttl_minutes: int = Field(
+        default=60,
+        description="Validade padrão do link temporário, em minutos",
+        ge=1,
+        le=1440
     )
     default_limit: int = Field(
         default=20,
