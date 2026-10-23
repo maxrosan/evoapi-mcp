@@ -29,6 +29,20 @@ devolve não servia — só existe dentro do container.
   resto. Link vencido responde **410**, não 404
 - Configuração: `EVOLUTION_PUBLIC_URL` (sem ela a tool não emite link), `EVOLUTION_LINK_SECRET`
   (padrão: o próprio `MCP_AUTH_TOKEN`) e `EVOLUTION_LINK_TTL_MINUTES` (padrão 60, teto 1440)
+- **`upload_link(to, number?, caption?, folder?, financeiro?, minutes?)`**: o mesmo link virado
+  ao contrário. Abre uma **página de envio**; o arquivo que Max escolher no celular ou no
+  computador sobe para o servidor e segue para o Drive, para uma conversa do WhatsApp ou para
+  os dois. O destino vai **dentro** da assinatura, então quem recebe o link não troca o número
+  nem a pasta. Rota `/up/<token>`: `GET` serve a página, `PUT` recebe os bytes — sem
+  `multipart`, o que também faz `curl -T arquivo.pdf "<url>"` funcionar
+- As duas entregas são independentes: Drive falhar não cancela o WhatsApp, o resultado diz o
+  que houve com cada uma, e o `path` no servidor volta sempre. O arquivo fica em
+  `<EVOLUTION_MEDIA_DIR>/upload/`, com sufixo quando o nome repete, e o nome que veio do
+  navegador é reduzido a um nome de arquivo (sem caminho, sem `..`, sem caractere de controle)
+- A finalidade (baixar ou subir) entra na assinatura: um link de download não vira, com o
+  mesmo segredo, permissão de gravar no servidor
+- `EVOLUTION_UPLOAD_MAX_MB` (padrão 32) limita cada arquivo; acima disso a rota corta o
+  upload na chegada e responde 413, sem deixar arquivo parcial
 
 ### 🖼️ Imagem saindo daqui sem base64 no chat
 

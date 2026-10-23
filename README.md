@@ -270,6 +270,7 @@ do MCP (`server.py`), ditas uma vez:
 | foi arquivado no Drive por aqui | `send_drive_file` |
 | é texto | `send_text_message` |
 | não é para a conversa: Max quer **baixar** | `temp_link` |
+| está com Max e precisa **entrar** no servidor | `upload_link` |
 
 As três tools de base64 (`send_image_base64`, `send_document_base64`,
 `get_media_base64`) ficam **escondidas por padrão**. Elas existem por paridade com o
@@ -327,6 +328,41 @@ lugares de onde não volta.
 EVOLUTION_PUBLIC_URL=https://meuservidor.exemplo   # sem isto a tool não emite link
 EVOLUTION_LINK_SECRET=...                          # padrão: o próprio MCP_AUTH_TOKEN
 EVOLUTION_LINK_TTL_MINUTES=60                      # teto de 1440
+```
+
+### Mandar um arquivo PARA o servidor
+
+`upload_link` é o mesmo link virado ao contrário: em vez de buscar um arquivo, ele abre
+uma **página de envio**. Max escolhe o arquivo no celular ou no computador, e de lá ele
+segue para onde o link disser — Drive, WhatsApp ou os dois.
+
+```
+upload_link(to="drive", folder="FAS")
+upload_link(to="both", number="5511999999999", caption="segue a nota", financeiro=True, folder="MR/2026/10.2026/NOTA")
+→ {"url":"https://.../up/<token>","expires_at":"2026-10-23 15:40","expires_in_min":60,
+   "to":"both","destino":"Google Drive (FINANCEIRO/MR/2026/10.2026/NOTA) e WhatsApp (5511999999999)"}
+```
+
+**O destino viaja dentro da assinatura**, não na URL: quem recebe o link não consegue
+trocar o número nem a pasta, só mandar o arquivo para onde já estava decidido. A página
+mostra em português para onde ele vai, antes do envio.
+
+O arquivo sobe por `PUT` direto (a página faz isso com trinta linhas de JavaScript; de
+terminal, `curl -T arquivo.pdf "<url>"` funciona igual), então o servidor não precisa
+interpretar `multipart`. Ele é gravado em `<EVOLUTION_MEDIA_DIR>/upload/`, com sufixo
+quando o nome repete, e o nome que veio do navegador é reduzido a um nome de arquivo —
+sem caminho, sem `..`, sem caractere de controle.
+
+As duas entregas são independentes: se o link pede Drive **e** WhatsApp e o WhatsApp
+falha, o Drive continua valendo e a resposta diz o que aconteceu com cada um. O arquivo
+já está no servidor de qualquer forma, e o `path` volta sempre — perder tudo porque um
+destino recusou seria o pior dos mundos.
+
+Dentro do prazo o link vale para **vários arquivos**, de propósito: mandar três notas de
+uma vez é o caso comum. Quem controla o estrago é o relógio, não a contagem.
+
+```bash
+EVOLUTION_UPLOAD_MAX_MB=32   # teto por arquivo; acima disso a rota responde 413
 ```
 
 ### Faxina da pasta de mídias

@@ -75,6 +75,11 @@ Quando o arquivo não é para a CONVERSA e sim para Max baixar ("me passa o arqu
 endereço assinado que vence em uma hora. Aceita o id da mensagem direto, então pegar
 um anexo do WhatsApp e virar link é uma chamada só.
 
+Quando o arquivo está COM MAX e precisa chegar aqui ("quero te mandar um arquivo",
+"como subo isso", "manda pro Drive isso que está no meu celular") → upload_link: o link
+abre uma página de envio, e o destino (Drive, WhatsApp ou os dois) já vai assinado
+dentro dele. Nunca peça o arquivo em base64 pela conversa.
+
 Para LER o que chegou, na mesma lógica: download_media(extract_text=True) quando o
 documento tem camada de texto, view_media quando não tem (comprovante fotografado,
 PDF escaneado) e transcribe_audio para áudio — inclusive para o que é falado num
@@ -938,6 +943,53 @@ def temp_link(
         resultado = links.build(
             file_path=caminho,
             media_dir=config.media_dir,
+            public_url=config.public_url,
+            secret=links.secret_from(config, os.environ),
+            minutes=minutes or config.link_ttl_minutes,
+        )
+    except links.LinkError as e:
+        return _out({"error": str(e)})
+    resultado["expires_at"] = fmt_ts(resultado["expires_at"])
+    return _out(resultado)
+
+
+@mcp.tool()
+def upload_link(
+    to: str = "server",
+    number: str | None = None,
+    caption: str | None = None,
+    folder: str = "",
+    financeiro: bool = False,
+    minutes: int = 0,
+) -> str:
+    """Devolve um link de página para Max mandar um arquivo do celular ou do computador.
+
+    O contrário de `temp_link`: aqui o arquivo **entra**. O link abre uma página com um
+    seletor de arquivo; o que for escolhido sobe para o servidor e, de lá, segue para
+    onde o link disser — Drive, WhatsApp ou os dois. O arquivo não passa pela conversa,
+    que é o que encareceria tudo.
+
+    Use quando Max disser "quero te mandar um arquivo", "como eu subo isso", "manda pro
+    Drive esse arquivo que tá no meu celular" ou "me dá um jeito de enviar isso daqui".
+
+    O destino viaja **dentro** da assinatura do link: quem abre não consegue mudar o
+    número nem a pasta. Dentro do prazo o link vale para vários arquivos, de propósito.
+
+    Args:
+        to: "server" (só guarda), "drive", "whatsapp" ou "both"
+        number: destinatário no WhatsApp, internacional sem '+' (exigido em whatsapp/both)
+        caption: legenda da mensagem, quando vai para o WhatsApp
+        folder: subpasta no Drive (ex: "FAS", "MR/2026/10.2026/BOLETO")
+        financeiro: True usa a pasta base FINANCEIRO em vez de ARQUIVOS
+        minutes: validade em minutos (padrão: EVOLUTION_LINK_TTL_MINUTES, 60; teto 1440)
+    Returns: {url, expires_at, expires_in_min, to, destino}
+    """
+    try:
+        resultado = links.build_upload(
+            destino={
+                "to": to, "number": number, "caption": caption,
+                "folder": folder, "financeiro": financeiro,
+            },
             public_url=config.public_url,
             secret=links.secret_from(config, os.environ),
             minutes=minutes or config.link_ttl_minutes,
