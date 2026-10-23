@@ -42,7 +42,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
@@ -230,13 +230,37 @@ def build_app(token: str):
     # propósito — quem abre é um navegador, que não manda header nenhum. O que
     # protege o arquivo é a assinatura da própria URL, com o prazo dentro dela.
     from evoapi_mcp import links
+    from evoapi_mcp.formatters import fmt_ts
 
     link_secret = links.secret_from(evolution_config, os.environ)
     media_dir = Path(evolution_config.media_dir)
+    max_upload = evolution_config.upload_max_mb * 1024 * 1024
+
+    def para_drive(caminho: str, pasta: str, financeiro: bool) -> dict:
+        """Mesma divisão das tools: financeiro vai para a base FINANCEIRO, o resto para ARQUIVOS."""
+        if financeiro:
+            return evolution_client.archive_file(file_path=caminho, folder=pasta)
+        resultado = evolution_client.save_to_drive(file_path=caminho, folder=pasta)
+        arquivos = resultado.get("arquivos") or []
+        if not arquivos:
+            erros = resultado.get("erros") or []
+            raise RuntimeError(erros[0].get("erro") if erros else "o Drive não aceitou o arquivo")
+        return arquivos[0]
+
+    def para_whatsapp(caminho: str, numero: str, legenda: str | None) -> dict:
+        from evoapi_mcp.server import _enviado
+
+        # _enviado registra a mensagem como já tratada: sem isso, um arquivo que Max
+        # manda para ele mesmo voltaria pela fila como se fosse instrução dele.
+        return _enviado(evolution_client.send_file(
+            number=numero, file_path=caminho, caption=legenda,
+        ))
     if evolution_config.public_url and link_secret:
+        base = evolution_config.public_url.rstrip("/")
         print(
-            f"Links temporários em {evolution_config.public_url.rstrip('/')}{links.PREFIXO}/"
-            f" (padrão {evolution_config.link_ttl_minutes} min)",
+            f"Links temporários em {base}{links.PREFIXO}/ (baixar) e {base}{links.PREFIXO_UP}/ "
+            f"(subir, até {evolution_config.upload_max_mb} MB), padrão "
+            f"{evolution_config.link_ttl_minutes} min",
             file=sys.stderr,
         )
     else:
@@ -280,6 +304,9 @@ def build_app(token: str):
                 await send({"type": "http.response.body", "body": pedaco, "more_body": True})
         await send({"type": "http.response.body", "body": b""})
 
+    async def responder_json(send, status: int, dados: dict) -> None:
+        await respond(send, status, json.dumps(dados, ensure_ascii=False).encode(), b"application/json")
+
     async def read_body(receive) -> bytes:
         corpo = b""
         while True:
@@ -312,6 +339,57 @@ def build_app(token: str):
                     await respond(send, 404, str(e).encode(), b"text/plain; charset=utf-8")
                     return
                 await respond_file(send, alvo, head=scope.get("method") == "HEAD")
+                return
+
+            if caminho == links.PREFIXO_UP or caminho.startswith(f"{links.PREFIXO_UP}/"):
+                metodo = scope.get("method")
+                if metodo not in ("GET", "PUT"):
+                    await respond(send, 405, b"Method Not Allowed", b"text/plain; charset=utf-8")
+                    return
+                token = caminho[len(links.PREFIXO_UP) + 1:].split("/", 1)[0]
+                try:
+                    destino = links.resolve_upload(token, link_secret)
+                except links.LinkExpired as e:
+                    await respond(send, 410, str(e).encode(), b"text/plain; charset=utf-8")
+                    return
+                except links.LinkError as e:
+                    await respond(send, 404, str(e).encode(), b"text/plain; charset=utf-8")
+                    return
+
+                if metodo == "GET":
+                    pagina = links.pagina_upload(
+                        destino, fmt_ts(destino["exp"]) or "", evolution_config.upload_max_mb
+                    )
+                    await respond(send, 200, pagina, b"text/html; charset=utf-8")
+                    return
+
+                consulta = parse_qs(scope.get("query_string", b"").decode())
+                nome = (consulta.get("name") or [""])[0]
+                # O teto vale enquanto o corpo chega: um upload absurdo é cortado na
+                # chegada, não depois de ocupar o disco (ou a memória) inteiro.
+                pedacos, total = [], 0
+                while True:
+                    evento = await receive()
+                    corpo = evento.get("body", b"")
+                    total += len(corpo)
+                    if total > max_upload:
+                        await responder_json(send, 413, {
+                            "error": f"Arquivo acima do limite de {evolution_config.upload_max_mb} MB."
+                        })
+                        return
+                    pedacos.append(corpo)
+                    if not evento.get("more_body"):
+                        break
+
+                try:
+                    arquivo = links.guardar_upload(media_dir, nome, pedacos, max_upload)
+                except links.LinkError as e:
+                    await responder_json(send, 400, {"error": str(e)})
+                    return
+                resultado = links.entregar(
+                    arquivo, destino, para_drive=para_drive, para_whatsapp=para_whatsapp,
+                )
+                await responder_json(send, 200, resultado)
                 return
 
             if webhook_secret and caminho.startswith(f"/webhook/{webhook_secret}"):

@@ -22,6 +22,8 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_LINK_SECRET: (Opcional) Segredo que assina o link temporário
       (vazio: usa MCP_AUTH_TOKEN)
     - EVOLUTION_LINK_TTL_MINUTES: (Opcional) Validade padrão do link (padrão: 60)
+    - EVOLUTION_UPLOAD_MAX_MB: (Opcional) Teto de cada arquivo enviado pela página
+      de upload (padrão: 32)
     - EVOLUTION_DEFAULT_LIMIT: (Opcional) Quantidade padrão de itens em listagens (padrão: 20)
     - EVOLUTION_MAX_TEXT_CHARS: (Opcional) Corte de texto por mensagem no modo compacto (padrão: 500)
 
@@ -88,6 +90,12 @@ class EvolutionConfig(BaseSettings):
         description="Validade padrão do link temporário, em minutos",
         ge=1,
         le=1440
+    )
+    upload_max_mb: int = Field(
+        default=32,
+        description="Tamanho máximo de um arquivo enviado pela página de upload, em MB",
+        ge=1,
+        le=512
     )
     default_limit: int = Field(
         default=20,
