@@ -116,6 +116,10 @@ CODE_DIRS = [
     str(Path(d.strip()).expanduser()) for d in os.environ.get("CODE_DIRS", "").replace(";", ",").split(",")
     if d.strip() and Path(d.strip()).expanduser().is_dir()
 ]
+# 0 desliga o `git pull` automático sem mexer em CODE_DIRS, que também é o que dá
+# ao executor a leitura do código. Serve para o remoto HTTPS sem credencial salva:
+# ali cada pull abre a janela do Git Credential Manager e, como este script roda sem
+# entrada, o git fica pendurado até estourar o timeout.
 CODE_PULL_EVERY_S = float(os.environ.get("CODE_PULL_EVERY_S", "900") or 900)
 # Arquivos de segredo nunca são lidos, mesmo dentro das pastas liberadas: uma
 # investigação responde numa conversa com outras pessoas.
@@ -136,7 +140,9 @@ _ultimo_pull: dict[str, float] = {}
 
 
 def atualizar_codigo() -> None:
-    """git pull nas pastas de código, no máximo a cada CODE_PULL_EVERY_S."""
+    """git pull nas pastas de código, no máximo a cada CODE_PULL_EVERY_S (0 desliga)."""
+    if CODE_PULL_EVERY_S <= 0:
+        return
     agora = time.time()
     for pasta in CODE_DIRS:
         if agora - _ultimo_pull.get(pasta, 0) < CODE_PULL_EVERY_S or not (Path(pasta) / ".git").exists():
@@ -421,7 +427,8 @@ def main() -> int:
         return 0
     log.info("executor ativo: consulta a cada %ss, modelo %s, claude em %s, servidores extras: %s",
              POLL_SECONDS, CLAUDE_MODEL, CLAUDE_BIN, ", ".join(EXTRA_MCP_SERVERS) or "nenhum")
-    log.info("pastas de código: %s", ", ".join(CODE_DIRS) or "nenhuma")
+    log.info("pastas de código: %s (git pull %s)", ", ".join(CODE_DIRS) or "nenhuma",
+             f"a cada {int(CODE_PULL_EVERY_S)}s" if CODE_PULL_EVERY_S > 0 else "desligado")
     log.info("investigações: modelo %s, até %ss", INVESTIGATION_MODEL, int(INVESTIGATION_TIMEOUT_S))
 
     mcp = Mcp(MCP_URL, MCP_AUTH_TOKEN)
