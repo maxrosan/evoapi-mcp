@@ -9,6 +9,28 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+### 📅 Google Agenda → WhatsApp
+
+Evento na Agenda com o título **`Enviar no WhatsApp: <número>`** vira mensagem: o texto vai
+na descrição do evento, e o dia e a hora do evento são a hora do envio.
+
+- **`gcalendar.py`**: o servidor lê a Agenda de hora em hora e põe cada evento desses na
+  fila de mensagens agendadas que já existia (verificada a cada 30 s). A leitura só precisa
+  ver o evento antes da hora; o envio sai no minuto certo
+- Cada evento fica ligado à agendada que gerou (tabela `calendar_links`): editar número,
+  texto ou horário troca a agendada; apagar o evento, ou tirar o "Enviar no WhatsApp" do
+  título, cancela; o que já foi enviado não sai de novo, a não ser que seja remarcado para o futuro
+- Evento criado em cima da hora, visto só depois do horário, sai assim que é lido
+- Número com ou sem 55, com espaços, parênteses e traços; jid de grupo (`...@g.us`) também.
+  Evento de dia inteiro sai às 09:00 (`EVOLUTION_CALENDAR_ALLDAY_TIME`). Descrição com
+  negrito/itálico/lista vira a formatação do WhatsApp
+- **`check_calendar()`**: lê agora, sem esperar a hora cheia, e diz por que um evento foi
+  ignorado (sem descrição, número inválido). `get_instance_info` mostra `agenda_google`
+- Acesso só de leitura (`calendar.readonly`), com o mesmo cliente OAuth do Drive:
+  `python scripts/google_oauth_setup.py --calendar --from-env google_drive_env.txt` gera
+  `EVOLUTION_CALENDAR_REFRESH_TOKEN`. Sem ele a leitura fica desligada
+- Configuração: `EVOLUTION_CALENDAR_ID` (primary), `_INTERVAL_MIN` (60), `_LOOKAHEAD_HOURS` (24)
+
 ### 🔗 Link temporário: o arquivo do servidor vira endereço
 
 Faltava o caminho de volta para o próprio Max. As tools levam arquivo para a conversa ou

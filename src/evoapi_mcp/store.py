@@ -24,6 +24,7 @@ MEMORY_TABLE = "memories"
 INDEX_TABLE = "indexed_files"
 CHUNK_TABLE = "indexed_chunks"
 CONVERSATION_TABLE = "conversations"
+CALENDAR_TABLE = "calendar_links"
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
     message_id  TEXT PRIMARY KEY,
@@ -42,6 +43,13 @@ CREATE TABLE IF NOT EXISTS {SCHEDULE_TABLE} (
     sent_at     TIMESTAMPTZ,
     message_id  TEXT,
     error       TEXT
+);
+CREATE TABLE IF NOT EXISTS {CALENDAR_TABLE} (
+    event_id     TEXT PRIMARY KEY,
+    scheduled_id BIGINT NOT NULL,
+    fingerprint  TEXT NOT NULL,
+    start_at     TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS {SCHEDULE_TABLE}_due ON {SCHEDULE_TABLE} (send_at) WHERE status = 'pending';
 CREATE TABLE IF NOT EXISTS {MEMORY_TABLE} (
@@ -136,6 +144,7 @@ class MemoryStore:
         self._ids: set[str] = set()
         self._agenda: dict[int, dict[str, Any]] = {}
         self._proximo = 1
+        self._calendario: dict[str, dict[str, Any]] = {}
         self._memorias: dict[int, dict[str, Any]] = {}
         self._proxima_memoria = 1
         self._indexados: dict[int, dict[str, Any]] = {}
@@ -184,6 +193,24 @@ class MemoryStore:
             return False
         item["status"] = "cancelled"
         return True
+
+    # ------------------------------------------------------------ agenda google
+
+    def calendar_link(self, event_id: str) -> dict[str, Any] | None:
+        link = self._calendario.get(event_id)
+        if link is None:
+            return None
+        item = self._agenda.get(link["scheduled_id"]) or {}
+        return dict(link, status=item.get("status"), send_at=item.get("send_at"))
+
+    def set_calendar_link(self, event_id: str, scheduled_id: int, fingerprint: str, start_at: datetime | None) -> None:
+        self._calendario[event_id] = {
+            "event_id": event_id, "scheduled_id": int(scheduled_id),
+            "fingerprint": fingerprint, "start_at": start_at,
+        }
+
+    def calendar_pending_links(self) -> list[dict[str, Any]]:
+        return [l for l in (self.calendar_link(e) for e in self._calendario) if l and l["status"] == "pending"]
 
     # ------------------------------------------------------------ memória
 
@@ -488,6 +515,39 @@ class PostgresStore:
         except Exception as e:
             _log(f"falha ao cancelar agendada #{sid}: {e}", "ERROR")
             return False
+
+    # ------------------------------------------------------------ agenda google
+
+    _LINK_SELECT = (
+        f"SELECT l.event_id, l.scheduled_id, l.fingerprint, l.start_at, s.status, s.send_at"
+        f" FROM {CALENDAR_TABLE} l LEFT JOIN {SCHEDULE_TABLE} s ON s.id = l.scheduled_id"
+    )
+    _LINK_COLS = ("event_id", "scheduled_id", "fingerprint", "start_at", "status", "send_at")
+
+    def calendar_link(self, event_id: str) -> dict[str, Any] | None:
+        if not self.available:
+            raise RuntimeError("banco indisponível")
+        with self._pool.connection() as conn:
+            row = conn.execute(self._LINK_SELECT + " WHERE l.event_id = %s", (event_id,)).fetchone()
+        return dict(zip(self._LINK_COLS, row)) if row else None
+
+    def set_calendar_link(self, event_id: str, scheduled_id: int, fingerprint: str, start_at: datetime | None) -> None:
+        if not self.available:
+            raise RuntimeError("banco indisponível")
+        with self._pool.connection() as conn:
+            conn.execute(
+                f"INSERT INTO {CALENDAR_TABLE} (event_id, scheduled_id, fingerprint, start_at) VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (event_id) DO UPDATE SET scheduled_id = EXCLUDED.scheduled_id,"
+                " fingerprint = EXCLUDED.fingerprint, start_at = EXCLUDED.start_at, updated_at = now()",
+                (event_id, int(scheduled_id), fingerprint, start_at),
+            )
+
+    def calendar_pending_links(self) -> list[dict[str, Any]]:
+        if not self.available:
+            return []
+        with self._pool.connection() as conn:
+            rows = conn.execute(self._LINK_SELECT + " WHERE s.status = 'pending'").fetchall()
+        return [dict(zip(self._LINK_COLS, r)) for r in rows]
 
     # ------------------------------------------------------------ memória
 

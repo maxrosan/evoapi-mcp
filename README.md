@@ -365,6 +365,22 @@ uma vez é o caso comum. Quem controla o estrago é o relógio, não a contagem.
 EVOLUTION_UPLOAD_MAX_MB=32   # teto por arquivo; acima disso a rota responde 413
 ```
 
+### Google Agenda → WhatsApp
+
+Crie um evento na Agenda com o título `Enviar no WhatsApp: 5584999990000` e escreva a
+mensagem na descrição. No dia e na hora do evento, o servidor envia. Ele lê a Agenda de
+hora em hora e põe o evento na fila de mensagens agendadas (`list_scheduled`); editar o
+evento troca a mensagem e apagar cancela. `check_calendar` força a leitura na hora.
+
+Configuração: habilite a **Google Calendar API** no projeto do Cloud Console do Drive e rode
+
+```bash
+python scripts/google_oauth_setup.py --calendar --from-env google_drive_env.txt
+```
+
+Cole `EVOLUTION_CALENDAR_REFRESH_TOKEN` (de `google_calendar_env.txt`) no servidor. Opcionais:
+`EVOLUTION_CALENDAR_ID`, `_INTERVAL_MIN` (60), `_LOOKAHEAD_HOURS` (24), `_ALLDAY_TIME` (09:00).
+
 ### Faxina da pasta de mídias
 
 Tudo que o servidor toca vira arquivo: anexo baixado, PNG rasterizado, download de URL,
