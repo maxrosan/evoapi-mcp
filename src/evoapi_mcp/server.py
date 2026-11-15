@@ -615,6 +615,29 @@ def cancel_scheduled(id: int) -> str:
 
 
 @mcp.tool()
+def check_calendar() -> str:
+    """Lê o Google Agenda agora, sem esperar a leitura de hora em hora.
+
+    Evento cujo título começa com "Enviar no WhatsApp: <número>" vira mensagem agendada
+    para o dia e a hora do evento, com o texto da descrição. Use quando Max acabou de
+    criar ou mudar um evento desses, ou para ver por que um evento não entrou
+    (`ignorados` traz o motivo). As mensagens geradas aparecem em list_scheduled.
+
+    Returns: {lidos, agendados, atualizados, cancelados, ignorados, sem_mudanca}
+    """
+    from evoapi_mcp.webhook import EVENTS
+    from evoapi_mcp.gcalendar import CalendarError
+    leitor = getattr(EVENTS, "calendar", None)
+    if leitor is None:
+        return _out({"error": "leitura da Agenda desligada: defina EVOLUTION_CALENDAR_REFRESH_TOKEN "
+                              "(scripts/google_oauth_setup.py --calendar)"})
+    try:
+        return _out(leitor.sync())
+    except (CalendarError, RuntimeError) as e:
+        return _out({"error": str(e)})
+
+
+@mcp.tool()
 def react_to_message(
     number: str,
     message_id: str,
@@ -1517,6 +1540,8 @@ def get_instance_info(full: bool = False) -> str:
     info["vigia"] = vigia.describe() if vigia else {"ativo": False}
     agenda = getattr(EVENTS, "scheduler", None)
     info["agenda"] = agenda.describe() if agenda else {"ativa": False}
+    leitor = getattr(EVENTS, "calendar", None)
+    info["agenda_google"] = leitor.describe() if leitor else {"ativa": False}
     memoria = getattr(EVENTS, "memory", None)
     info["memoria"] = memoria.describe() if memoria else {"ativa": False}
     historico = getattr(EVENTS, "history", None)

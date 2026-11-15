@@ -20,6 +20,14 @@ Uso:
 
 O navegador abre, você escolhe a conta do Drive e autoriza. O resultado fica em
 `google_drive_env.txt`, no formato pronto para colar no Easypanel.
+
+Google Agenda (leitura dos eventos "Enviar no WhatsApp: <número>"):
+
+    python scripts/google_oauth_setup.py --calendar --from-env google_drive_env.txt
+
+Usa o mesmo cliente OAuth do Drive (lido do arquivo, sem aparecer na tela) e pede só
+o escopo `calendar.readonly`. Antes, habilite a **Google Calendar API** no mesmo
+projeto do Cloud Console. O resultado fica em `google_calendar_env.txt`.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ import requests
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/drive.file"
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 
 _resultado: dict[str, str] = {}
 
@@ -76,10 +85,25 @@ def main() -> int:
     ap.add_argument("--client-json", help="JSON do cliente OAuth baixado do console")
     ap.add_argument("--client-id", help="Client ID (alternativa ao --client-json)")
     ap.add_argument("--client-secret", help="Client secret; se omitido, é pedido sem eco")
-    ap.add_argument("--out", default="google_drive_env.txt", help="Arquivo de saída")
+    ap.add_argument("--from-env", help="Lê client ID e secret de um arquivo gerado antes (google_drive_env.txt)")
+    ap.add_argument("--calendar", action="store_true", help="Token de leitura do Google Agenda, em vez do Drive")
+    ap.add_argument("--out", help="Arquivo de saída (padrão: google_drive_env.txt ou google_calendar_env.txt)")
     args = ap.parse_args()
+    escopo = CALENDAR_SCOPE if args.calendar else SCOPE
+    saida = args.out or ("google_calendar_env.txt" if args.calendar else "google_drive_env.txt")
 
-    if args.client_json:
+    if args.from_env:
+        valores = {}
+        for linha in Path(args.from_env).read_text(encoding="utf-8").splitlines():
+            if "=" in linha and not linha.lstrip().startswith("#"):
+                chave, valor = linha.split("=", 1)
+                valores[chave.strip()] = valor.strip()
+        client_id = valores.get("EVOLUTION_DRIVE_CLIENT_ID", "")
+        client_secret = valores.get("EVOLUTION_DRIVE_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            ap.error(f"{args.from_env} não tem EVOLUTION_DRIVE_CLIENT_ID e EVOLUTION_DRIVE_CLIENT_SECRET")
+            return 2
+    elif args.client_json:
         dados = json.loads(Path(args.client_json).read_text(encoding="utf-8"))
         bloco = dados.get("installed") or dados.get("web") or dados
         client_id = bloco["client_id"]
@@ -102,14 +126,17 @@ def main() -> int:
         "client_id": client_id,
         "redirect_uri": redirect,
         "response_type": "code",
-        "scope": SCOPE,
+        "scope": escopo,
         "access_type": "offline",
         "prompt": "consent",
         "state": estado,
     })
 
     print("Abrindo o navegador para autorizar.")
-    print("Escolha a conta dona do Drive onde os arquivos devem ficar.")
+    if args.calendar:
+        print("Escolha a conta dona da Agenda que o servidor vai ler.")
+    else:
+        print("Escolha a conta dona do Drive onde os arquivos devem ficar.")
     print(f"\nSe não abrir sozinho, acesse:\n{url}\n")
     webbrowser.open(url)
 
@@ -152,6 +179,9 @@ def main() -> int:
         )
         return 1
 
+    if args.calendar:
+        return gravar_agenda(payload["access_token"], refresh, Path(saida).resolve())
+
     # cria a pasta base já com o escopo drive.file, para ter o id dela
     root_id = ""
     nome_raiz = "FINANCEIRO"
@@ -169,7 +199,7 @@ def main() -> int:
     except requests.exceptions.RequestException:
         pass
 
-    destino = Path(args.out).resolve()
+    destino = Path(saida).resolve()
     linhas = [
         "# Cole estas linhas nas variáveis de ambiente do serviço (Easypanel).",
         "# Trate como senha: quem tiver isto escreve no seu Drive.",
@@ -187,6 +217,36 @@ def main() -> int:
         print(f"Pasta '{nome_raiz}' criada no seu Drive e já referenciada no arquivo.")
     print("\nAbra o arquivo, copie as linhas para o Easypanel e faça o deploy.")
     print("Depois apague o arquivo: ele contém um segredo.")
+    return 0
+
+
+def gravar_agenda(access_token: str, refresh: str, destino: Path) -> int:
+    """Confere que a Agenda responde e grava o token pronto para o Easypanel."""
+    try:
+        r = requests.get(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"maxResults": 1, "fields": "summary"},
+            timeout=60,
+        )
+        if r.status_code >= 300:
+            print(f"Aviso: a Agenda respondeu HTTP {r.status_code}: {r.text[:300]}", file=sys.stderr)
+            print("Se a mensagem fala em API desativada, habilite a Google Calendar API no projeto "
+                  "do Cloud Console e espere alguns minutos. O token abaixo continua valendo.", file=sys.stderr)
+        else:
+            print(f"Agenda lida com sucesso: {r.json().get('summary', 'primary')}")
+    except requests.exceptions.RequestException as e:
+        print(f"Aviso: não consegui testar a Agenda ({e}).", file=sys.stderr)
+
+    destino.write_text("\n".join([
+        "# Cole esta linha nas variáveis de ambiente do serviço (Easypanel).",
+        "# Trate como senha: quem tiver isto lê a sua Agenda.",
+        "# O client ID e o secret são os mesmos do Drive (EVOLUTION_DRIVE_CLIENT_*).",
+        f"EVOLUTION_CALENDAR_REFRESH_TOKEN={refresh}",
+    ]) + "\n", encoding="utf-8")
+    print("\nPronto.")
+    print(f"Token gravado em: {destino}")
+    print("Copie a linha para o Easypanel, faça o deploy e depois apague o arquivo.")
     return 0
 
 

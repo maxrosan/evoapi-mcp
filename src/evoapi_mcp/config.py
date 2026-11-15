@@ -43,6 +43,11 @@ class EvolutionConfig(BaseSettings):
     - EVOLUTION_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN: credenciais OAuth
     - EVOLUTION_DRIVE_ROOT / _ROOT_ID: pasta base do arquivamento
 
+    Google Agenda → WhatsApp (opcional; ver gcalendar.py):
+    - EVOLUTION_CALENDAR_REFRESH_TOKEN: token com escopo calendar.readonly. Sem ele a leitura fica desligada
+    - EVOLUTION_CALENDAR_CLIENT_ID / _CLIENT_SECRET: vazios usam os do Drive
+    - EVOLUTION_CALENDAR_ID (primary), _INTERVAL_MIN (60), _LOOKAHEAD_HOURS (24), _ALLDAY_TIME (09:00)
+
     Conversa pessoal (eu comigo mesmo):
     - EVOLUTION_OWNER_NUMBER: seu número, ex: 5584999290327. Nessa conversa toda
       mensagem sua é instrução, sem precisar do prefixo "IA:"
@@ -252,6 +257,25 @@ class EvolutionConfig(BaseSettings):
         description="Pasta para arquivos que não são financeiros, ao lado da base financeira (ou na raiz)"
     )
     drive_files_root_id: str = Field(default="", description="Id da pasta de arquivos, se quiser fixar")
+    calendar_refresh_token: str = Field(
+        default="",
+        description="Refresh token OAuth com escopo calendar.readonly (scripts/google_oauth_setup.py --calendar)"
+    )
+    calendar_client_id: str = Field(default="", description="Client ID da Agenda; vazio usa o do Drive")
+    calendar_client_secret: str = Field(default="", description="Client secret da Agenda; vazio usa o do Drive")
+    calendar_id: str = Field(default="primary", description="Agenda lida: 'primary' ou o id de outra agenda")
+    calendar_interval_min: int = Field(
+        default=60, ge=5, le=1440,
+        description="De quantos em quantos minutos a Agenda é lida"
+    )
+    calendar_lookahead_hours: int = Field(
+        default=24, ge=1, le=24 * 31,
+        description="Até quantas horas à frente os eventos já entram na fila de agendadas"
+    )
+    calendar_allday_time: str = Field(
+        default="09:00",
+        description="Hora de envio de evento de dia inteiro (HH:MM, no fuso de Max)"
+    )
     base64_tools: bool = Field(
         default=False,
         description="Expõe as tools de base64 (send_*_base64, get_media_base64). Caras: use só por compatibilidade"

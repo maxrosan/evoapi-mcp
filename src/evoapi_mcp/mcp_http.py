@@ -134,6 +134,33 @@ def build_app(token: str):
     agenda.start()
     eventos.scheduler = agenda
 
+    # Google Agenda: evento "Enviar no WhatsApp: <número>" entra na fila acima.
+    eventos.calendar = None
+    if evolution_config.calendar_refresh_token.strip():
+        from evoapi_mcp.gcalendar import CalendarClient, CalendarWatcher
+
+        leitor = CalendarWatcher(
+            store=eventos.store,
+            calendar=CalendarClient(
+                client_id=evolution_config.calendar_client_id or evolution_config.drive_client_id,
+                client_secret=evolution_config.calendar_client_secret or evolution_config.drive_client_secret,
+                refresh_token=evolution_config.calendar_refresh_token,
+                calendar_id=evolution_config.calendar_id,
+                timeout=evolution_config.timeout,
+            ),
+            tz=evolution_config.timezone,
+            interval_s=evolution_config.calendar_interval_min * 60,
+            lookahead_s=evolution_config.calendar_lookahead_hours * 3600,
+            allday_time=evolution_config.calendar_allday_time,
+        )
+        if leitor.calendar.available:
+            leitor.start()
+            eventos.calendar = leitor
+        else:
+            print("Agenda Google desligada: falta o client ID/secret (do Drive ou EVOLUTION_CALENDAR_CLIENT_*).", file=sys.stderr)
+    else:
+        print("Agenda Google desligada (EVOLUTION_CALENDAR_REFRESH_TOKEN vazio).", file=sys.stderr)
+
     # Cada evento ensina ao cliente os dois endereços de uma conversa (@lid e número).
     eventos.on_alias = evolution_client.learn_chat_alias
 
